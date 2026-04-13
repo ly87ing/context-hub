@@ -62,7 +62,7 @@ class CredentialsTest(ContextHubTestCase):
 
     def test_gitlab_url_resolves_instance_and_token_var(self) -> None:
         try:
-            from integrations.gitlab_adapter import preflight_gitlab
+            from integrations.gitlab_adapter import build_api_base, preflight_gitlab
         except ModuleNotFoundError as exc:
             self.fail(f"missing gitlab adapter: {exc}")
 
@@ -83,6 +83,7 @@ class CredentialsTest(ContextHubTestCase):
                 "missing": [],
             },
         )
+        self.assertEqual(build_api_base(result["base_url"]), "https://itgitlab.xylink.com/api/v4")
         self.assertNotIn("it-secret-token", json.dumps(result, sort_keys=True))
 
     def test_gitlab_url_reports_unsupported_instance_for_unknown_host(self) -> None:
@@ -190,3 +191,65 @@ class CredentialsTest(ContextHubTestCase):
             },
         )
         self.assertNotIn("default-secret-token", result.stdout)
+
+    def test_gitlab_http_error_does_not_leak_token(self) -> None:
+        try:
+            from integrations.gitlab_adapter import lookup_project
+            from runtime.http_client import HttpError, HttpResponse
+        except ModuleNotFoundError as exc:
+            self.fail(f"missing adapter/runtime module: {exc}")
+
+        class FakeTransport:
+            def request(self, method: str, url: str, *, headers=None, data=None, timeout=10):
+                raise HttpError(
+                    HttpResponse(
+                        status=401,
+                        headers={},
+                        body=b'{"message":"401 Unauthorized","token":"leaky-token-123"}',
+                        url=url,
+                    )
+                )
+
+        with self.assertRaises(HttpError) as ctx:
+            lookup_project(
+                "https://gitlab.xylink.com/group/project.git",
+                environ={"GITLAB_ACCESS_TOKEN": "default-secret-token"},
+                transport=FakeTransport(),
+            )
+
+        self.assertNotIn("default-secret-token", str(ctx.exception))
+        self.assertNotIn("leaky-token-123", str(ctx.exception))
+
+    def test_ones_http_error_does_not_leak_token(self) -> None:
+        try:
+            from integrations.ones_adapter import get_task_info
+            from runtime.http_client import HttpError, HttpResponse
+        except ModuleNotFoundError as exc:
+            self.fail(f"missing adapter/runtime module: {exc}")
+
+        class FakeTransport:
+            def request(self, method: str, url: str, *, headers=None, data=None, timeout=10):
+                raise HttpError(
+                    HttpResponse(
+                        status=401,
+                        headers={},
+                        body=b'{"message":"401 Unauthorized","token":"leaky-token-456"}',
+                        url=url,
+                    )
+                )
+
+        with self.assertRaises(HttpError) as ctx:
+            get_task_info(
+                "TASK-42",
+                environ={
+                    "ONES_TOKEN": "ones-secret-token",
+                    "ONES_USER_UUID": "user-2",
+                    "ONES_TEAM_UUID": "TEAM-2",
+                },
+                transport=FakeTransport(),
+            )
+
+        rendered = str(ctx.exception)
+        self.assertNotIn("ones-secret-token", rendered)
+        self.assertNotIn("user-2", rendered)
+        self.assertNotIn("leaky-token-456", rendered)
