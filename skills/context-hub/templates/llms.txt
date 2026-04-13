@@ -1,0 +1,23 @@
+# {project_name}
+
+{summary}
+
+## 使用顺序
+1. 先读 IDENTITY.md 了解项目全貌
+2. 再读 topology/system.yaml 了解服务与依赖
+3. 再读 topology/domains.yaml 定位业务能力
+4. 最后读 capabilities/ 和 decisions/ 获取具体上下文
+
+## 业务域
+{domain_lines}
+
+## 服务清单
+{service_lines}
+
+## 测试源
+{source_lines}
+
+## AI 行为约束
+- 任何写入前先读取已有上下文
+- 更新 capability 时同步维护 topology/domains.yaml
+- 产出后运行最小相关校验
