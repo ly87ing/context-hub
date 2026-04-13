@@ -119,7 +119,7 @@ description: |
 python3 skills/context-hub/scripts/init_context_hub.py --output /tmp/demo-hub --name "Demo" --id demo
 python3 skills/context-hub/scripts/create_capability.py --hub /tmp/demo-hub --name voting --domain meeting --ones-task TASK-1
 python3 skills/context-hub/scripts/refresh_context.py /tmp/demo-hub --sync-gitlab --sync-ones
-python3 skills/context-hub/scripts/refresh_context.py /tmp/demo-hub --sync-gitlab --gitlab-url git@itgitlab.xylink.com:group/service.git --gitlab-branch main
+python3 skills/context-hub/scripts/refresh_context.py /tmp/demo-hub --sync-gitlab --gitlab-url git@itgitlab.xylink.com:group/service.git --gitlab-branch main --gitlab-commit abc123
 python3 skills/context-hub/scripts/bootstrap_credentials_check.py --check-ones
 python3 skills/context-hub/scripts/sync_topology.py --hub /tmp/demo-hub
 python3 skills/context-hub/scripts/sync_capability_status.py --hub /tmp/demo-hub --ones-team TEAM-UUID
@@ -146,3 +146,5 @@ python3 skills/context-hub/scripts/check_stale.py --hub /tmp/demo-hub
 - 以 preflight 判断是否具备后续集成条件
 - 以 sync + audit 保证仓库契约可持续维护
 - webhook 增量同步只缩小 GitLab enrichment 的作用域，team export 聚合仍保持 hub-scoped
+- GitLab webhook 增量模式要求 `repo URL + branch + commit SHA` 三元组；缺参或 changed-files 读取失败直接报错，信息性 skip 不单独升级成 warning
+- 第一版 changed-files gate 只认依赖清单与 API 契约文件：`pyproject.toml`、`requirements.txt`、`package.json`、`pom.xml`、`build.gradle*`、`go.mod`、`*.proto`、`openapi.*`、`swagger.*`

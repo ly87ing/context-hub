@@ -19,9 +19,9 @@ variables:
 sync-on-webhook:
   stage: sync
   rules:
-    - if: $TRIGGER_REPO && $TRIGGER_BRANCH  # 由 GitLab Webhook 触发时传入 repo URL 与 branch
+    - if: $TRIGGER_REPO && $TRIGGER_BRANCH && $TRIGGER_COMMIT  # 由 GitLab Webhook 触发时传入 repo URL、branch 与 commit
   script:
-    - python3 scripts/refresh_context.py . --sync-gitlab --gitlab-url "$TRIGGER_REPO" --gitlab-branch "$TRIGGER_BRANCH" --auto-commit --auto-push
+    - python3 scripts/refresh_context.py . --sync-gitlab --gitlab-url "$TRIGGER_REPO" --gitlab-branch "$TRIGGER_BRANCH" --gitlab-commit "$TRIGGER_COMMIT" --auto-commit --auto-push
   tags:
     - shared
 

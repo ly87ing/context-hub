@@ -227,7 +227,12 @@ services:
             )
 
         refresh_mock.assert_called_once_with(self.hub_dir.resolve())
-        gitlab_mock.assert_called_once_with(self.hub_dir.resolve(), repo_url=None, branch=None)
+        gitlab_mock.assert_called_once_with(
+            self.hub_dir.resolve(),
+            repo_url=None,
+            branch=None,
+            commit_sha=None,
+        )
         ones_mock.assert_called_once_with(self.hub_dir.resolve(), team_uuid="TEAM-UUID")
         llms_mock.assert_called_once_with(self.hub_dir.resolve())
         validate_mock.assert_called_once_with(self.hub_dir.resolve())
@@ -265,7 +270,12 @@ services:
             )
 
         refresh_mock.assert_called_once_with(self.hub_dir.resolve())
-        gitlab_mock.assert_called_once_with(self.hub_dir.resolve(), repo_url=None, branch=None)
+        gitlab_mock.assert_called_once_with(
+            self.hub_dir.resolve(),
+            repo_url=None,
+            branch=None,
+            commit_sha=None,
+        )
         ones_mock.assert_called_once_with(self.hub_dir.resolve(), team_uuid=None)
         llms_mock.assert_called_once_with(self.hub_dir.resolve())
         validate_mock.assert_called_once_with(self.hub_dir.resolve())
@@ -283,11 +293,14 @@ services:
         )
         self.assertTrue(result["committed"])
 
-    def test_run_refresh_workflow_passes_repo_url_and_branch_to_incremental_gitlab_sync(self) -> None:
+    def test_run_refresh_workflow_threads_repo_branch_and_commit_to_gitlab_sync(self) -> None:
         topology_dir = self.hub_dir / "topology"
         llms_path = self.hub_dir / ".context" / "llms.txt"
         gitlab_result = {
             "mode": "incremental",
+            "decision": "scan",
+            "reason_code": "",
+            "changed_files": ["pyproject.toml"],
             "matched_services": ["meeting-control-service"],
             "synced_services": ["meeting-control-service"],
             "reason": "",
@@ -313,14 +326,87 @@ services:
                 sync_gitlab=True,
                 gitlab_url="git@itgitlab.xylink.com:group/meeting-control-service.git",
                 gitlab_branch="main",
+                gitlab_commit="abc123",
             )
 
         gitlab_mock.assert_called_once_with(
             self.hub_dir.resolve(),
             repo_url="git@itgitlab.xylink.com:group/meeting-control-service.git",
             branch="main",
+            commit_sha="abc123",
         )
         self.assertEqual(result["outputs"]["system"], topology_dir / "system.yaml")
+        self.assertEqual(result["warnings"], [])
+
+    def test_run_refresh_workflow_propagates_incremental_gitlab_changed_files_errors(self) -> None:
+        topology_dir = self.hub_dir / "topology"
+        llms_path = self.hub_dir / ".context" / "llms.txt"
+        with (
+            patch.object(
+                refresh_context,
+                "refresh_shared_context",
+                return_value={
+                    "domains": topology_dir / "domains.yaml",
+                    "system": topology_dir / "system.yaml",
+                    "testing": topology_dir / "testing-sources.yaml",
+                    "llms": llms_path,
+                },
+            ),
+            patch.object(
+                refresh_context,
+                "run_gitlab_sync",
+                side_effect=ValueError("unable to read changed files"),
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, "unable to read changed files"):
+                refresh_context.run_refresh_workflow(
+                    self.hub_dir,
+                    sync_gitlab=True,
+                    gitlab_url="git@itgitlab.xylink.com:group/meeting-control-service.git",
+                    gitlab_branch="main",
+                    gitlab_commit="abc123",
+                )
+
+    def test_run_refresh_workflow_does_not_turn_incremental_skip_reason_into_warning(self) -> None:
+        topology_dir = self.hub_dir / "topology"
+        llms_path = self.hub_dir / ".context" / "llms.txt"
+        with (
+            patch.object(
+                refresh_context,
+                "refresh_shared_context",
+                return_value={
+                    "domains": topology_dir / "domains.yaml",
+                    "system": topology_dir / "system.yaml",
+                    "testing": topology_dir / "testing-sources.yaml",
+                    "llms": llms_path,
+                },
+            ),
+            patch.object(
+                refresh_context,
+                "run_gitlab_sync",
+                return_value={
+                    "mode": "incremental",
+                    "decision": "skip",
+                    "reason_code": "no_topology_signal",
+                    "reason": "docs-only changes",
+                    "changed_files": ["README.md"],
+                    "matched_services": ["meeting-control-service"],
+                    "synced_services": [],
+                    "system_path": topology_dir / "system.yaml",
+                },
+            ),
+            patch.object(refresh_context, "refresh_llms_txt", return_value=llms_path),
+            patch.object(refresh_context, "run_validation_checks", return_value=[]),
+        ):
+            result = refresh_context.run_refresh_workflow(
+                self.hub_dir,
+                sync_gitlab=True,
+                gitlab_url="git@itgitlab.xylink.com:group/meeting-control-service.git",
+                gitlab_branch="main",
+                gitlab_commit="abc123",
+            )
+
+        self.assertEqual(result["warnings"], [])
 
     def test_run_refresh_workflow_without_gitlab_url_keeps_full_sync_path(self) -> None:
         topology_dir = self.hub_dir / "topology"
@@ -345,7 +431,12 @@ services:
                 sync_gitlab=True,
             )
 
-        gitlab_mock.assert_called_once_with(self.hub_dir.resolve(), repo_url=None, branch=None)
+        gitlab_mock.assert_called_once_with(
+            self.hub_dir.resolve(),
+            repo_url=None,
+            branch=None,
+            commit_sha=None,
+        )
 
     def test_refresh_context_rejects_incremental_gitlab_sync_without_branch(self) -> None:
         result = run_script(
@@ -354,11 +445,28 @@ services:
             "--sync-gitlab",
             "--gitlab-url",
             "git@itgitlab.xylink.com:group/meeting-control-service.git",
+            "--gitlab-commit",
+            "abc123",
         )
 
         output = result.stdout + result.stderr
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("gitlab-branch", output)
+
+    def test_refresh_context_rejects_incremental_gitlab_sync_without_commit(self) -> None:
+        result = run_script(
+            "refresh_context.py",
+            str(self.hub_dir),
+            "--sync-gitlab",
+            "--gitlab-url",
+            "git@itgitlab.xylink.com:group/meeting-control-service.git",
+            "--gitlab-branch",
+            "main",
+        )
+
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("gitlab-commit", output)
 
     def test_refresh_context_dry_run_does_not_claim_files_refreshed(self) -> None:
         result = run_script("refresh_context.py", str(self.hub_dir), "--dry-run")

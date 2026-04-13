@@ -125,9 +125,9 @@
 - 可选执行 `sync_capability_status.py`
 - 写入后自动执行 `check_consistency.py` / `check_stale.py`
 - 可选执行 `auto-commit` / `auto-push`
-- webhook 增量模式支持 `--gitlab-url` + `--gitlab-branch`，只缩小 GitLab enrichment 的作用域
+- webhook 增量模式支持 `--gitlab-url` + `--gitlab-branch` + `--gitlab-commit`，先做 changed-files gating，再缩小 GitLab enrichment 的作用域
 
-如果 export 之间出现冲突，脚本会报错退出；如果外部同步或审计只产生 warning，脚本会保留结果但跳过自动提交。
+如果 export 之间出现冲突，脚本会报错退出；webhook 增量模式下 `repo/branch/commit` 缺失或 GitLab changed-files 读取失败也会直接报错退出。repo 未命中、branch 不匹配、`default_branch` 缺失、空 changed files、docs-only commit 只会返回信息性 skip，不会单独升级成 warning。validation warning 或显式 error decision 仍会阻断自动提交。
 
 ### 4.4 GitLab / ONES 集成基线
 
@@ -139,6 +139,8 @@
 - 回写 `source_system`、`source_ref`、`last_synced_at`、`confidence`
 - 保留手工维护字段，例如 `owner`、`notes`、`visibility`
 - 在 webhook 增量模式下按 repo URL 命中 service 集合，并按各自 `default_branch` 做 branch gating
+- 只有当前 commit 的 changed files 命中 topology-relevant patterns 时才继续扫描 repo
+- 第一版 patterns 只包含 `pyproject.toml`、`requirements.txt`、`package.json`、`pom.xml`、`build.gradle`、`build.gradle.kts`、`go.mod`、`*.proto`、`openapi.*`、`swagger.*`
 
 `sync_capability_status.py` 当前会：
 
@@ -209,7 +211,7 @@ python3 skills/context-hub/scripts/create_capability.py \
   --ones-task TASK-1
 
 python3 skills/context-hub/scripts/refresh_context.py /tmp/context-hub-demo --sync-gitlab --sync-ones
-python3 skills/context-hub/scripts/refresh_context.py /tmp/context-hub-demo --sync-gitlab --gitlab-url git@itgitlab.xylink.com:group/service.git --gitlab-branch main
+python3 skills/context-hub/scripts/refresh_context.py /tmp/context-hub-demo --sync-gitlab --gitlab-url git@itgitlab.xylink.com:group/service.git --gitlab-branch main --gitlab-commit abc123
 python3 skills/context-hub/scripts/bootstrap_credentials_check.py --check-ones
 python3 skills/context-hub/scripts/sync_topology.py --hub /tmp/context-hub-demo
 python3 skills/context-hub/scripts/sync_capability_status.py --hub /tmp/context-hub-demo --ones-team TEAM-UUID

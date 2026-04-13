@@ -422,10 +422,11 @@ def run_gitlab_sync(
     *,
     repo_url: str | None = None,
     branch: str | None = None,
+    commit_sha: str | None = None,
 ) -> Path | dict[str, object]:
     from sync_topology import sync_system_topology
 
-    return sync_system_topology(hub_root, repo_url=repo_url, branch=branch)
+    return sync_system_topology(hub_root, repo_url=repo_url, branch=branch, commit_sha=commit_sha)
 
 
 def run_ones_sync(hub_root: Path, *, team_uuid: str | None = None) -> list[Path]:
@@ -469,6 +470,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sync-ones", action="store_true", help="刷新后执行 ONES capability 同步")
     parser.add_argument("--gitlab-url", default="", help="指定用于增量同步的 GitLab repo URL")
     parser.add_argument("--gitlab-branch", default="", help="指定用于增量同步的 GitLab branch")
+    parser.add_argument("--gitlab-commit", default="", help="指定用于增量同步的 GitLab commit SHA")
     parser.add_argument("--ones-team", default="", help="可选的 ONES team UUID override")
     parser.add_argument("--dry-run", action="store_true", help="只报告计划动作，不写入文件")
     parser.add_argument("--auto-commit", action="store_true", help="刷新后自动提交变更")
@@ -483,6 +485,7 @@ def run_refresh_workflow(
     sync_ones: bool = False,
     gitlab_url: str | None = None,
     gitlab_branch: str | None = None,
+    gitlab_commit: str | None = None,
     ones_team: str | None = None,
     dry_run: bool = False,
     auto_commit: bool = False,
@@ -491,8 +494,11 @@ def run_refresh_workflow(
     hub_root = Path(hub_root).resolve()
     normalized_gitlab_url = str(gitlab_url or "").strip()
     normalized_gitlab_branch = str(gitlab_branch or "").strip()
+    normalized_gitlab_commit = str(gitlab_commit or "").strip()
     if sync_gitlab and normalized_gitlab_url and not normalized_gitlab_branch:
         raise ValueError("gitlab incremental sync requires --gitlab-branch")
+    if sync_gitlab and normalized_gitlab_url and not normalized_gitlab_commit:
+        raise ValueError("gitlab incremental sync requires --gitlab-commit")
     if sync_gitlab and normalized_gitlab_url:
         from integrations import gitlab_adapter
 
@@ -517,15 +523,22 @@ def run_refresh_workflow(
                 hub_root,
                 repo_url=normalized_gitlab_url or None,
                 branch=normalized_gitlab_branch or None,
+                commit_sha=normalized_gitlab_commit or None,
             )
         except ValueError as exc:
+            if normalized_gitlab_url:
+                raise
             warnings.append(str(exc))
         else:
             outputs["system"] = (
                 gitlab_result["system_path"] if isinstance(gitlab_result, dict) else gitlab_result
             )
             commit_paths[1] = Path(outputs["system"])
-            if isinstance(gitlab_result, dict) and gitlab_result.get("reason"):
+            if (
+                isinstance(gitlab_result, dict)
+                and gitlab_result.get("decision") == "error"
+                and gitlab_result.get("reason")
+            ):
                 warnings.append(str(gitlab_result["reason"]))
 
     if sync_ones:
@@ -565,6 +578,7 @@ def main() -> int:
             sync_ones=args.sync_ones,
             gitlab_url=args.gitlab_url or None,
             gitlab_branch=args.gitlab_branch or None,
+            gitlab_commit=args.gitlab_commit or None,
             ones_team=args.ones_team or None,
             dry_run=args.dry_run,
             auto_commit=args.auto_commit,
