@@ -77,6 +77,25 @@ changed files 通过 GitLab API 按 `repo URL + commit SHA` 读取。
 
 返回值只保留 changed file paths，不在 hub 中落完整 diff。
 
+### 4.1.1 rename / delete 契约
+
+GitLab commit diff 中如果出现 rename 或 delete，第一版按“保守触发”处理：
+
+- `new_path` 存在时，收集 `new_path`
+- `old_path` 存在时，收集 `old_path`
+- rename 时同时保留 `old_path` 和 `new_path`
+- delete 时至少保留被删除的 `old_path`
+
+这样即使 `pyproject.toml`、`openapi.yaml`、`*.proto` 这类 scan-worthy 文件被重命名或删除，changed-files gate 仍然能命中并触发 repo scan。
+
+### 4.1.2 空结果语义
+
+如果 GitLab API 调用成功，但最终提取出的 `changed_files` 为空列表：
+
+- 不视为 error
+- 视为 `skip`
+- `reason` 设为 `commit has no changed files`
+
 ### 4.2 位置
 
 changed-files 获取逻辑放在 `integrations/gitlab_adapter.py`，与现有 repo URL canonicalization 共享一套规则。
@@ -111,6 +130,17 @@ changed files 不是为了描述所有代码变化，而是为了回答一个问
 - `swagger.yaml`
 - `swagger.yml`
 
+### 5.2.1 匹配语义
+
+第一版匹配规则保持机械、可预测：
+
+- 文件名匹配按小写比较，避免大小写差异造成分叉
+- `pyproject.toml`、`requirements.txt`、`package.json`、`pom.xml`、`build.gradle`、`build.gradle.kts`、`go.mod` 按 basename 匹配
+- `*.proto` 按后缀匹配
+- `openapi.yaml`、`openapi.yml`、`swagger.yaml`、`swagger.yml` 按 basename 匹配
+- `docs/**` 只表示路径前缀为 `docs/` 的文件
+- `README.md` 只表示 basename 为 `README.md` 的文件
+
 ### 5.3 第一版显式 skip 场景
 
 以下 changed files 不触发 repo scan：
@@ -139,6 +169,13 @@ changed files 不是为了描述所有代码变化，而是为了回答一个问
   - `docs-only changes`
   - `commit does not touch topology-relevant files`
 
+同时建议把结果契约结构化，至少补一个字段：
+
+- `decision`: `scan` | `skip`
+- `reason_code`: 例如 `docs_only`、`no_matching_service`、`branch_mismatch`、`missing_default_branch`、`no_topology_signal`
+
+这样 `reason` 继续给人读，`decision` / `reason_code` 给 CI、日志和审计消费。
+
 ## 6. 运行时设计
 
 ### 6.1 `gitlab_adapter.py`
@@ -152,6 +189,7 @@ changed files 不是为了描述所有代码变化，而是为了回答一个问
 - 复用现有 repo URL normalization
 - 复用现有 GitLab instance / token 发现逻辑
 - 失败时抛出明确异常，不返回伪结果
+- 对 rename / delete 的 path 提取遵循 `4.1.1` 的契约
 
 ### 6.2 `sync_topology.py`
 
@@ -168,6 +206,12 @@ repo-scoped 增量路径新增第一步：
 - 不扫描 repo tree
 - 不修改该 repo 命中 service 的 GitLab enrichment 字段
 - 返回 skip reason
+
+如果 repo 未命中 service、branch 不匹配、`default_branch` 缺失，也统一返回：
+
+- `decision = "skip"`
+- 对应的 `reason_code`
+- 非空 `reason`
 
 ### 6.3 `refresh_context.py`
 
@@ -186,6 +230,24 @@ repo-scoped 增量路径新增第一步：
   - repo URL
   - branch
   - commit SHA
+
+错误传播规则要明确区分两类：
+
+- `fatal input/integration error`
+  - `repo URL` 非法
+  - `branch` 缺失
+  - `commit SHA` 缺失
+  - GitLab API 无法读取该 commit 的 changed files
+  - 这类错误必须保持 non-zero failure，不能被降级成 warning
+- `informational skip`
+  - repo 未命中 service
+  - branch 不匹配
+  - `default_branch` 缺失
+  - `changed_files` 为空
+  - changed files 不命中 scan-worthy patterns
+  - 这类结果只记录在 GitLab incremental result 中，不自动升级成 warning
+
+也就是说，`refresh_context.py` 需要停止把任何非空 `reason` 都视为 warning，而是只在 `decision = "error"` 或 validation 本身返回 warning 时阻断 `auto-commit`。
 
 ### 6.4 `.gitlab-ci.yml`
 
@@ -215,13 +277,17 @@ nightly full sync 保持不变。
 在现有 repo-scoped result 上新增：
 
 - `changed_files`: list[str]
+- `decision`: `scan` | `skip`
+- `reason_code`: 稳定的机器可读原因码
 
 最终增量结果建议至少包含：
 
 - `mode`
+- `decision`
 - `matched_services`
 - `synced_services`
 - `changed_files`
+- `reason_code`
 - `reason`
 - `system_path`
 
@@ -236,6 +302,8 @@ nightly full sync 保持不变。
 - `commit SHA` 缺失
 - GitLab API 无法读取该 commit 的 changed files
 
+这些错误必须在 `refresh_context.py` 保持 non-zero failure，不能被包装成 warning 后继续返回 `0`。
+
 ### 8.2 Skip
 
 以下情况应 skip，不算错误：
@@ -243,7 +311,10 @@ nightly full sync 保持不变。
 - repo 未命中 service
 - branch 不等于 service 的 `default_branch`
 - service 缺少 `default_branch`
+- `changed_files` 为空
 - changed files 不命中 scan-worthy patterns
+
+这些结果是“信息性 skip”，不应单独阻断 `auto-commit`。
 
 ## 9. 测试设计
 
