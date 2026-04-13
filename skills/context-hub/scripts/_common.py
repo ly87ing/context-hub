@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from runtime.hub_io import load_template, render_template, safe_write_text
@@ -21,6 +21,21 @@ def normalize_slug(value: str) -> str:
 
 def today_iso() -> str:
     return date.today().isoformat()
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def unique_preserving_order(values):
+    seen = set()
+    unique = []
+    for value in values:
+        if value in (None, "") or value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return unique
 
 
 def load_yaml_file(path: Path, default):

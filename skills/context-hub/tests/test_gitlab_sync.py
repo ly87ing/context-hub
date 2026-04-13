@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
 import json
 import sys
-from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 THIS_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = THIS_DIR.parent / "scripts"
@@ -11,6 +12,8 @@ for path in (THIS_DIR, SCRIPTS_DIR):
     path_str = str(path)
     if path_str not in sys.path:
         sys.path.insert(0, path_str)
+
+from test_support import ContextHubTestCase
 
 
 class FakeTransport:
@@ -149,3 +152,161 @@ class GitLabAdapterTest(unittest.TestCase):
         )
 
         self.assertIn("meeting-control-service", payload)
+
+
+class SyncTopologyTest(ContextHubTestCase):
+    def write_system_yaml(self, content: str) -> None:
+        topology_dir = self.hub_dir / "topology"
+        topology_dir.mkdir(parents=True, exist_ok=True)
+        (topology_dir / "system.yaml").write_text(content.strip() + "\n", encoding="utf-8")
+
+    def load_system_yaml(self) -> dict:
+        from yaml_compat import safe_load
+
+        return safe_load((self.hub_dir / "topology" / "system.yaml").read_text(encoding="utf-8"))
+
+    def test_sync_topology_deep_scans_gitlab_repo_and_preserves_manual_fields(self) -> None:
+        from sync_topology import sync_system_topology
+
+        self.write_system_yaml(
+            """
+services:
+  meeting-control-service:
+    repo: https://gitlab.xylink.com/group/meeting-control-service.git
+    owner: platform
+    notes: keep-this
+    visibility: shared
+    lang: unknown
+    framework: unknown
+    provides: []
+    depends_on: []
+infrastructure: {}
+""",
+        )
+
+        project = {
+            "id": 42,
+            "path_with_namespace": "group/meeting-control-service",
+            "default_branch": "main",
+        }
+        tree = [
+            {"path": "pyproject.toml", "type": "blob"},
+            {"path": "src/meeting_control/app.py", "type": "blob"},
+        ]
+        pyproject = """
+[project]
+name = "meeting-control-service"
+dependencies = [
+  "fastapi>=0.110",
+  "httpx>=0.27",
+  "redis>=5.0",
+]
+"""
+
+        with (
+            patch("sync_topology.gitlab_adapter.lookup_project", return_value=project) as lookup_project,
+            patch("sync_topology.gitlab_adapter.get_tree", return_value=tree) as get_tree,
+            patch("sync_topology.gitlab_adapter.get_file_raw", return_value=pyproject) as get_file_raw,
+            patch("sync_topology.utc_now_iso", return_value="2026-04-13T12:00:00Z"),
+        ):
+            system_path = sync_system_topology(self.hub_dir)
+
+        self.assertEqual(system_path, (self.hub_dir / "topology" / "system.yaml").resolve())
+        self.assertEqual(lookup_project.call_count, 1)
+        self.assertEqual(get_tree.call_count, 1)
+        self.assertEqual(get_file_raw.call_count, 1)
+
+        system_payload = self.load_system_yaml()
+        service = system_payload["services"]["meeting-control-service"]
+        self.assertEqual(service["repo"], "https://gitlab.xylink.com/group/meeting-control-service.git")
+        self.assertEqual(service["owner"], "platform")
+        self.assertEqual(service["notes"], "keep-this")
+        self.assertEqual(service["visibility"], "shared")
+        self.assertEqual(service["source_system"], "gitlab")
+        self.assertEqual(service["source_ref"], "group/meeting-control-service")
+        self.assertEqual(service["last_synced_at"], "2026-04-13T12:00:00Z")
+        self.assertEqual(service["confidence"], "high")
+        self.assertEqual(service["default_branch"], "main")
+        self.assertEqual(service["lang"], "python")
+        self.assertEqual(service["framework"], "fastapi")
+        self.assertEqual(service["provides"], ["api"])
+        self.assertEqual(service["depends_on"], ["httpx", "redis"])
+
+    def test_sync_topology_skips_unsupported_repo_without_crashing(self) -> None:
+        from sync_topology import sync_system_topology
+
+        self.write_system_yaml(
+            """
+services:
+  internal-console:
+    repo: https://github.com/example/internal-console.git
+    owner: platform
+    notes: keep-this
+    visibility: shared
+    lang: unknown
+    framework: unknown
+    provides: []
+    depends_on: []
+  meeting-control-service:
+    repo: https://gitlab.xylink.com/group/meeting-control-service.git
+    owner: platform
+    lang: unknown
+    framework: unknown
+    provides: []
+    depends_on: []
+infrastructure: {}
+""",
+        )
+
+        project = {
+            "id": 42,
+            "path_with_namespace": "group/meeting-control-service",
+            "default_branch": "main",
+        }
+
+        def lookup_project(repo_url: str, **kwargs):
+            if "github.com" in repo_url:
+                raise ValueError("unsupported GitLab instance")
+            return project
+
+        with (
+            patch("sync_topology.gitlab_adapter.lookup_project", side_effect=lookup_project),
+            patch("sync_topology.gitlab_adapter.get_tree", return_value=[]),
+            patch("sync_topology.gitlab_adapter.get_file_raw", return_value=""),
+            patch("sync_topology.utc_now_iso", return_value="2026-04-13T12:00:00Z"),
+        ):
+            sync_system_topology(self.hub_dir)
+
+        system_payload = self.load_system_yaml()
+        self.assertEqual(system_payload["services"]["internal-console"]["repo"], "https://github.com/example/internal-console.git")
+        self.assertEqual(system_payload["services"]["internal-console"]["lang"], "unknown")
+        self.assertEqual(system_payload["services"]["meeting-control-service"]["source_system"], "gitlab")
+
+    def test_sync_topology_skips_missing_credentials_without_crashing(self) -> None:
+        from sync_topology import sync_system_topology
+
+        self.write_system_yaml(
+            """
+services:
+  meeting-control-service:
+    repo: https://gitlab.xylink.com/group/meeting-control-service.git
+    owner: platform
+    lang: unknown
+    framework: unknown
+    provides: []
+    depends_on: []
+infrastructure: {}
+""",
+        )
+
+        with (
+            patch("sync_topology.gitlab_adapter.lookup_project", side_effect=ValueError("missing GitLab credentials")),
+            patch("sync_topology.utc_now_iso", return_value="2026-04-13T12:00:00Z"),
+        ):
+            sync_system_topology(self.hub_dir)
+
+        system_payload = self.load_system_yaml()
+        service = system_payload["services"]["meeting-control-service"]
+        self.assertEqual(service["repo"], "https://gitlab.xylink.com/group/meeting-control-service.git")
+        self.assertEqual(service["lang"], "unknown")
+        self.assertNotIn("source_system", service)
