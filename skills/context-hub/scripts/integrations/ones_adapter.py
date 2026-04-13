@@ -57,13 +57,14 @@ def build_headers(
     token: str | None = None,
     user_uuid: str | None = None,
 ) -> dict[str, str]:
-    if token and user_uuid:
-        return {
-            "ones-auth-token": token,
-            "ones-user-id": user_uuid,
-        }
-
-    resolved = require_values(("ONES_TOKEN", "ONES_USER_UUID"), environ=environ)
+    discovered = discover_values(("ONES_TOKEN", "ONES_USER_UUID"), environ=environ)
+    resolved = require_values(
+        ("ONES_TOKEN", "ONES_USER_UUID"),
+        environ={
+            "ONES_TOKEN": token or discovered["ONES_TOKEN"] or "",
+            "ONES_USER_UUID": user_uuid or discovered["ONES_USER_UUID"] or "",
+        },
+    )
     return {
         "ones-auth-token": token or resolved["ONES_TOKEN"],
         "ones-user-id": user_uuid or resolved["ONES_USER_UUID"],
@@ -72,8 +73,6 @@ def build_headers(
 
 def build_client(
     *,
-    team_uuid: str | None = None,
-    ones_url: str | None = None,
     environ: Mapping[str, str] | None = None,
     token: str | None = None,
     user_uuid: str | None = None,
@@ -101,8 +100,6 @@ def query_tasks(
     timeout: float = 10.0,
 ) -> dict[str, object]:
     resolved_client = client or build_client(
-        team_uuid=team_uuid,
-        ones_url=ones_url,
         environ=environ,
         token=token,
         user_uuid=user_uuid,
@@ -133,8 +130,6 @@ def get_task_info(
     timeout: float = 10.0,
 ) -> dict[str, object]:
     resolved_client = client or build_client(
-        team_uuid=team_uuid,
-        ones_url=ones_url,
         environ=environ,
         token=token,
         user_uuid=user_uuid,

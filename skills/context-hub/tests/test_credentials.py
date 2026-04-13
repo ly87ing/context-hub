@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import sys
+import urllib.error
 from pathlib import Path
+from unittest.mock import patch
 
 THIS_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = THIS_DIR.parent / "scripts"
@@ -195,22 +198,20 @@ class CredentialsTest(ContextHubTestCase):
     def test_gitlab_http_error_does_not_leak_token(self) -> None:
         try:
             from integrations.gitlab_adapter import lookup_project
-            from runtime.http_client import HttpError, HttpResponse
+            from runtime.http_client import HttpUnauthorizedError, HttpResponse
         except ModuleNotFoundError as exc:
             self.fail(f"missing adapter/runtime module: {exc}")
 
         class FakeTransport:
             def request(self, method: str, url: str, *, headers=None, data=None, timeout=10):
-                raise HttpError(
-                    HttpResponse(
-                        status=401,
-                        headers={},
-                        body=b'{"message":"401 Unauthorized","token":"leaky-token-123"}',
-                        url=url,
-                    )
+                return HttpResponse(
+                    status=401,
+                    headers={},
+                    body=b'{"message":"401 Unauthorized","token":"leaky-token-123"}',
+                    url=url,
                 )
 
-        with self.assertRaises(HttpError) as ctx:
+        with self.assertRaises(HttpUnauthorizedError) as ctx:
             lookup_project(
                 "https://gitlab.xylink.com/group/project.git",
                 environ={"GITLAB_ACCESS_TOKEN": "default-secret-token"},
@@ -223,22 +224,20 @@ class CredentialsTest(ContextHubTestCase):
     def test_ones_http_error_does_not_leak_token(self) -> None:
         try:
             from integrations.ones_adapter import get_task_info
-            from runtime.http_client import HttpError, HttpResponse
+            from runtime.http_client import HttpUnauthorizedError, HttpResponse
         except ModuleNotFoundError as exc:
             self.fail(f"missing adapter/runtime module: {exc}")
 
         class FakeTransport:
             def request(self, method: str, url: str, *, headers=None, data=None, timeout=10):
-                raise HttpError(
-                    HttpResponse(
-                        status=401,
-                        headers={},
-                        body=b'{"message":"401 Unauthorized","token":"leaky-token-456"}',
-                        url=url,
-                    )
+                return HttpResponse(
+                    status=401,
+                    headers={},
+                    body=b'{"message":"401 Unauthorized","token":"leaky-token-456"}',
+                    url=url,
                 )
 
-        with self.assertRaises(HttpError) as ctx:
+        with self.assertRaises(HttpUnauthorizedError) as ctx:
             get_task_info(
                 "TASK-42",
                 environ={
@@ -253,3 +252,18 @@ class CredentialsTest(ContextHubTestCase):
         self.assertNotIn("ones-secret-token", rendered)
         self.assertNotIn("user-2", rendered)
         self.assertNotIn("leaky-token-456", rendered)
+
+    def test_http_client_maps_timeout_to_semantic_exception(self) -> None:
+        try:
+            from runtime.http_client import HttpClient, HttpTimeoutError
+        except ModuleNotFoundError as exc:
+            self.fail(f"missing runtime module: {exc}")
+
+        with patch(
+            "runtime.http_client.urllib.request.urlopen",
+            side_effect=urllib.error.URLError(socket.timeout("timed out")),
+        ):
+            with self.assertRaises(HttpTimeoutError) as ctx:
+                HttpClient().get("https://gitlab.xylink.com/api/v4/projects")
+
+        self.assertIn("timed out", str(ctx.exception))
