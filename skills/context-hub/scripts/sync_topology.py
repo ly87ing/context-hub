@@ -25,6 +25,16 @@ KEY_FILE_PRIORITY = (
     "go.mod",
     "requirements.txt",
 )
+SCAN_WORTHY_BASENAMES = {
+    "pyproject.toml",
+    "requirements.txt",
+    "package.json",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "go.mod",
+    *OPENAPI_FILENAMES,
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -274,6 +284,41 @@ def should_sync_service_for_branch(service: dict[str, object], branch: str | Non
     return True, ""
 
 
+def should_scan_repo_for_changed_files(paths: list[str]) -> tuple[bool, str, str]:
+    normalized_paths = [str(path).strip() for path in paths if str(path).strip()]
+    if not normalized_paths:
+        return False, "no_changed_files", "commit has no changed files"
+
+    for raw_path in normalized_paths:
+        normalized_path = raw_path.lower()
+        filename = Path(normalized_path).name
+        if filename in SCAN_WORTHY_BASENAMES or normalized_path.endswith(".proto"):
+            return True, "", ""
+    return False, "no_topology_signal", "commit does not touch topology-relevant files"
+
+
+def build_incremental_result(
+    *,
+    system_path: Path,
+    decision: str,
+    matched_services: list[str],
+    synced_services: list[str],
+    changed_files: list[str] | None = None,
+    reason_code: str = "",
+    reason: str = "",
+) -> dict[str, object]:
+    return {
+        "mode": "incremental",
+        "decision": decision,
+        "matched_services": matched_services,
+        "synced_services": synced_services,
+        "changed_files": unique_preserving_order(changed_files or []),
+        "reason_code": reason_code,
+        "reason": reason,
+        "system_path": system_path.resolve(),
+    }
+
+
 def scan_repo_summary(service: dict[str, object]) -> dict[str, object] | None:
     repo_url = str(service.get("repo") or "").strip()
     if not repo_url:
@@ -346,7 +391,12 @@ def sync_all_services(hub_root: Path) -> Path:
     return system_path
 
 
-def sync_services_for_repo(hub_root: Path, repo_url: str, branch: str | None) -> dict[str, object]:
+def sync_services_for_repo(
+    hub_root: Path,
+    repo_url: str,
+    branch: str | None,
+    commit_sha: str | None = None,
+) -> dict[str, object]:
     hub_root = Path(hub_root).resolve()
     topology_dir = hub_root / "topology"
     topology_dir.mkdir(parents=True, exist_ok=True)
@@ -366,19 +416,76 @@ def sync_services_for_repo(hub_root: Path, repo_url: str, branch: str | None) ->
 
     if not matched:
         save_yaml_file(system_path, system_payload)
-        return {
-            "mode": "incremental",
-            "matched_services": [],
-            "synced_services": [],
-            "reason": "no service match for repo URL",
-            "system_path": system_path.resolve(),
-        }
+        return build_incremental_result(
+            system_path=system_path,
+            decision="skip",
+            matched_services=[],
+            synced_services=[],
+            changed_files=[],
+            reason_code="no_matching_service",
+            reason="no service match for repo URL",
+        )
 
+    normalized_commit = str(commit_sha or "").strip()
+    if not normalized_commit:
+        for service_name, service in matched:
+            should_sync, reason = should_sync_service_for_branch(service, branch)
+            if not should_sync:
+                reasons.append(f"{service_name}: {reason}")
+                continue
+            summary = scan_repo_summary(service)
+            if summary is None:
+                reasons.append(f"{service_name}: gitlab scan skipped")
+                continue
+            services[service_name] = merge_service_summary(service, summary)
+            synced_service_names.append(service_name)
+
+        save_yaml_file(system_path, system_payload)
+        return build_incremental_result(
+            system_path=system_path,
+            decision="scan" if synced_service_names else "skip",
+            matched_services=matched_service_names,
+            synced_services=synced_service_names,
+            changed_files=[],
+            reason="; ".join(reasons),
+        )
+
+    eligible_services: list[tuple[str, dict[str, object]]] = []
     for service_name, service in matched:
         should_sync, reason = should_sync_service_for_branch(service, branch)
         if not should_sync:
             reasons.append(f"{service_name}: {reason}")
             continue
+        eligible_services.append((service_name, service))
+
+    if not eligible_services:
+        save_yaml_file(system_path, system_payload)
+        reason_code = "missing_default_branch" if any("default_branch missing" in reason for reason in reasons) else "branch_mismatch"
+        return build_incremental_result(
+            system_path=system_path,
+            decision="skip",
+            matched_services=matched_service_names,
+            synced_services=[],
+            changed_files=[],
+            reason_code=reason_code,
+            reason="; ".join(reasons),
+        )
+
+    changed_files = gitlab_adapter.get_commit_changed_files(repo_url, normalized_commit)
+    should_scan, reason_code, reason = should_scan_repo_for_changed_files(changed_files)
+    if not should_scan:
+        save_yaml_file(system_path, system_payload)
+        return build_incremental_result(
+            system_path=system_path,
+            decision="skip",
+            matched_services=matched_service_names,
+            synced_services=[],
+            changed_files=changed_files,
+            reason_code=reason_code,
+            reason=reason,
+        )
+
+    for service_name, service in eligible_services:
         summary = scan_repo_summary(service)
         if summary is None:
             reasons.append(f"{service_name}: gitlab scan skipped")
@@ -387,13 +494,14 @@ def sync_services_for_repo(hub_root: Path, repo_url: str, branch: str | None) ->
         synced_service_names.append(service_name)
 
     save_yaml_file(system_path, system_payload)
-    return {
-        "mode": "incremental",
-        "matched_services": matched_service_names,
-        "synced_services": synced_service_names,
-        "reason": "; ".join(reasons),
-        "system_path": system_path.resolve(),
-    }
+    return build_incremental_result(
+        system_path=system_path,
+        decision="scan" if synced_service_names else "skip",
+        matched_services=matched_service_names,
+        synced_services=synced_service_names,
+        changed_files=changed_files,
+        reason="; ".join(reasons),
+    )
 
 
 def sync_system_topology(
@@ -401,9 +509,10 @@ def sync_system_topology(
     *,
     repo_url: str | None = None,
     branch: str | None = None,
+    commit_sha: str | None = None,
 ) -> Path | dict[str, object]:
     if repo_url:
-        return sync_services_for_repo(hub_root, repo_url, branch)
+        return sync_services_for_repo(hub_root, repo_url, branch, commit_sha)
     return sync_all_services(hub_root)
 
 

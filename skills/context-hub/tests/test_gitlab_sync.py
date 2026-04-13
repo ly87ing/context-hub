@@ -344,6 +344,24 @@ class SyncTopologyTest(ContextHubTestCase):
 
         return safe_load((self.hub_dir / "topology" / "system.yaml").read_text(encoding="utf-8"))
 
+    def write_single_gitlab_service_system_yaml(self, *, default_branch: str | None = "main") -> None:
+        default_branch_line = (
+            f"    default_branch: {default_branch}\n" if default_branch is not None else ""
+        )
+        self.write_system_yaml(
+            f"""
+services:
+  meeting-control-service:
+    repo: https://itgitlab.xylink.com/group/meeting-control-service.git
+    owner: platform
+{default_branch_line}    lang: unknown
+    framework: unknown
+    provides: []
+    depends_on: []
+infrastructure: {{}}
+""",
+        )
+
     def test_sync_topology_deep_scans_gitlab_repo_and_preserves_manual_fields(self) -> None:
         from sync_topology import sync_system_topology
 
@@ -764,3 +782,185 @@ infrastructure: {}
         self.assertFalse(lookup_project.called)
         self.assertFalse(get_tree.called)
         self.assertFalse(get_file_raw.called)
+
+    def test_sync_topology_incremental_scan_worthy_commit_populates_changed_files(self) -> None:
+        from sync_topology import sync_system_topology
+
+        self.write_single_gitlab_service_system_yaml()
+
+        project = {
+            "id": 42,
+            "path_with_namespace": "group/meeting-control-service",
+            "default_branch": "main",
+        }
+        tree = [{"path": "pyproject.toml", "type": "blob"}]
+
+        with (
+            patch("sync_topology.gitlab_adapter.get_commit_changed_files", return_value=["pyproject.toml"]),
+            patch("sync_topology.gitlab_adapter.lookup_project", return_value=project),
+            patch("sync_topology.gitlab_adapter.get_tree", return_value=tree),
+            patch("sync_topology.gitlab_adapter.get_file_raw", return_value="[project]\nname = 'meeting-control-service'\n"),
+            patch("sync_topology.utc_now_iso", return_value="2026-04-13T12:00:00Z"),
+        ):
+            result = sync_system_topology(
+                self.hub_dir,
+                repo_url="https://itgitlab.xylink.com/group/meeting-control-service.git",
+                branch="main",
+                commit_sha="abc123",
+            )
+
+        self.assertEqual(result["mode"], "incremental")
+        self.assertEqual(result["decision"], "scan")
+        self.assertEqual(result["synced_services"], ["meeting-control-service"])
+        self.assertEqual(result["changed_files"], ["pyproject.toml"])
+
+    def test_sync_topology_incremental_scan_decision_skips_when_no_service_summary_is_produced(self) -> None:
+        from sync_topology import sync_system_topology
+
+        self.write_single_gitlab_service_system_yaml()
+
+        with (
+            patch("sync_topology.gitlab_adapter.get_commit_changed_files", return_value=["pyproject.toml"]),
+            patch("sync_topology.scan_repo_summary", return_value=None),
+            patch("sync_topology.utc_now_iso", return_value="2026-04-13T12:00:00Z"),
+        ):
+            result = sync_system_topology(
+                self.hub_dir,
+                repo_url="https://itgitlab.xylink.com/group/meeting-control-service.git",
+                branch="main",
+                commit_sha="abc123",
+            )
+
+        self.assertEqual(result["mode"], "incremental")
+        self.assertEqual(result["decision"], "skip")
+        self.assertEqual(result["synced_services"], [])
+        self.assertEqual(result["changed_files"], ["pyproject.toml"])
+        self.assertIn("gitlab scan skipped", result["reason"])
+
+    def test_sync_topology_incremental_docs_only_commit_skips_with_reason_code(self) -> None:
+        from sync_topology import sync_system_topology
+
+        self.write_single_gitlab_service_system_yaml()
+
+        with (
+            patch("sync_topology.gitlab_adapter.get_commit_changed_files", return_value=["README.md", "docs/usage.md"]),
+            patch("sync_topology.utc_now_iso", return_value="2026-04-13T12:00:00Z"),
+        ):
+            result = sync_system_topology(
+                self.hub_dir,
+                repo_url="https://itgitlab.xylink.com/group/meeting-control-service.git",
+                branch="main",
+                commit_sha="abc123",
+            )
+
+        self.assertEqual(result["mode"], "incremental")
+        self.assertEqual(result["decision"], "skip")
+        self.assertEqual(result["reason_code"], "no_topology_signal")
+        self.assertEqual(result["changed_files"], ["README.md", "docs/usage.md"])
+
+    def test_sync_topology_incremental_empty_changed_files_skips_with_reason_code(self) -> None:
+        from sync_topology import sync_system_topology
+
+        self.write_single_gitlab_service_system_yaml()
+
+        with (
+            patch("sync_topology.gitlab_adapter.get_commit_changed_files", return_value=[]),
+            patch("sync_topology.utc_now_iso", return_value="2026-04-13T12:00:00Z"),
+        ):
+            result = sync_system_topology(
+                self.hub_dir,
+                repo_url="https://itgitlab.xylink.com/group/meeting-control-service.git",
+                branch="main",
+                commit_sha="abc123",
+            )
+
+        self.assertEqual(result["mode"], "incremental")
+        self.assertEqual(result["decision"], "skip")
+        self.assertEqual(result["reason_code"], "no_changed_files")
+        self.assertEqual(result["reason"], "commit has no changed files")
+        self.assertEqual(result["changed_files"], [])
+
+    def test_sync_topology_incremental_branch_mismatch_skips_with_reason_code(self) -> None:
+        from sync_topology import sync_system_topology
+
+        self.write_single_gitlab_service_system_yaml()
+
+        with (
+            patch("sync_topology.gitlab_adapter.get_commit_changed_files") as get_commit_changed_files,
+            patch("sync_topology.gitlab_adapter.lookup_project") as lookup_project,
+            patch("sync_topology.utc_now_iso", return_value="2026-04-13T12:00:00Z"),
+        ):
+            result = sync_system_topology(
+                self.hub_dir,
+                repo_url="https://itgitlab.xylink.com/group/meeting-control-service.git",
+                branch="feature/x",
+                commit_sha="abc123",
+            )
+
+        self.assertEqual(result["mode"], "incremental")
+        self.assertEqual(result["decision"], "skip")
+        self.assertEqual(result["reason_code"], "branch_mismatch")
+        self.assertEqual(result["changed_files"], [])
+        self.assertFalse(get_commit_changed_files.called)
+        self.assertFalse(lookup_project.called)
+
+    def test_sync_topology_incremental_missing_default_branch_skips_with_reason_code(self) -> None:
+        from sync_topology import sync_system_topology
+
+        self.write_single_gitlab_service_system_yaml(default_branch=None)
+
+        with (
+            patch("sync_topology.gitlab_adapter.get_commit_changed_files") as get_commit_changed_files,
+            patch("sync_topology.gitlab_adapter.lookup_project") as lookup_project,
+            patch("sync_topology.utc_now_iso", return_value="2026-04-13T12:00:00Z"),
+        ):
+            result = sync_system_topology(
+                self.hub_dir,
+                repo_url="https://itgitlab.xylink.com/group/meeting-control-service.git",
+                branch="main",
+                commit_sha="abc123",
+            )
+
+        self.assertEqual(result["mode"], "incremental")
+        self.assertEqual(result["decision"], "skip")
+        self.assertEqual(result["reason_code"], "missing_default_branch")
+        self.assertEqual(result["changed_files"], [])
+        self.assertFalse(get_commit_changed_files.called)
+        self.assertFalse(lookup_project.called)
+
+    def test_sync_topology_incremental_no_matching_service_skips_with_reason_code(self) -> None:
+        from sync_topology import sync_system_topology
+
+        self.write_system_yaml(
+            """
+services:
+  other-service:
+    repo: https://itgitlab.xylink.com/group/other-service.git
+    owner: platform
+    default_branch: main
+    lang: unknown
+    framework: unknown
+    provides: []
+    depends_on: []
+infrastructure: {}
+""",
+        )
+
+        with (
+            patch("sync_topology.gitlab_adapter.get_commit_changed_files") as get_commit_changed_files,
+            patch("sync_topology.gitlab_adapter.lookup_project") as lookup_project,
+            patch("sync_topology.utc_now_iso", return_value="2026-04-13T12:00:00Z"),
+        ):
+            result = sync_system_topology(
+                self.hub_dir,
+                repo_url="https://itgitlab.xylink.com/group/meeting-control-service.git",
+                branch="main",
+                commit_sha="abc123",
+            )
+
+        self.assertEqual(result["mode"], "incremental")
+        self.assertEqual(result["decision"], "skip")
+        self.assertEqual(result["reason_code"], "no_matching_service")
+        self.assertEqual(result["changed_files"], [])
+        self.assertFalse(get_commit_changed_files.called)
+        self.assertFalse(lookup_project.called)
