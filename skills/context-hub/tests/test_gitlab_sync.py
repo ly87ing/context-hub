@@ -153,6 +153,185 @@ class GitLabAdapterTest(unittest.TestCase):
 
         self.assertIn("meeting-control-service", payload)
 
+    def test_get_commit_changed_files_reads_gitlab_commit_diff(self) -> None:
+        from integrations.gitlab_adapter import get_commit_changed_files
+        from runtime.http_client import HttpResponse
+
+        commit = "abc123"
+        repo_url = "git@itgitlab.xylink.com:group/meeting-control-service.git"
+        url = (
+            "https://itgitlab.xylink.com/api/v4/projects/group%2Fmeeting-control-service/"
+            f"repository/commits/{commit}/diff"
+        )
+        transport = FakeTransport(
+            {
+                ("GET", url): HttpResponse(
+                    status=200,
+                    headers={},
+                    body=json.dumps(
+                        [
+                            {
+                                "old_path": "pyproject.toml",
+                                "new_path": "pyproject.toml",
+                                "deleted_file": False,
+                                "renamed_file": False,
+                            },
+                            {
+                                "old_path": "openapi.yaml",
+                                "new_path": "openapi.yaml",
+                                "deleted_file": False,
+                                "renamed_file": False,
+                            },
+                        ]
+                    ).encode("utf-8"),
+                    url=url,
+                )
+            }
+        )
+
+        paths = get_commit_changed_files(
+            repo_url,
+            commit,
+            environ={"ITGITLAB_ACCESS_TOKEN": "it-secret-token"},
+            transport=transport,
+        )
+
+        self.assertEqual(paths, ["pyproject.toml", "openapi.yaml"])
+
+    def test_get_commit_changed_files_keeps_old_and_new_paths_for_rename(self) -> None:
+        from integrations.gitlab_adapter import get_commit_changed_files
+        from runtime.http_client import HttpResponse
+
+        transport = FakeTransport(
+            {
+                (
+                    "GET",
+                    "https://itgitlab.xylink.com/api/v4/projects/group%2Fmeeting-control-service/repository/commits/abc123/diff",
+                ): HttpResponse(
+                    status=200,
+                    headers={},
+                    body=json.dumps(
+                        [
+                            {
+                                "old_path": "old/openapi.yaml",
+                                "new_path": "contracts/openapi.yaml",
+                                "deleted_file": False,
+                                "renamed_file": True,
+                            }
+                        ]
+                    ).encode("utf-8"),
+                    url="https://itgitlab.xylink.com/api/v4/projects/group%2Fmeeting-control-service/repository/commits/abc123/diff",
+                )
+            }
+        )
+
+        paths = get_commit_changed_files(
+            "git@itgitlab.xylink.com:group/meeting-control-service.git",
+            "abc123",
+            environ={"ITGITLAB_ACCESS_TOKEN": "it-secret-token"},
+            transport=transport,
+        )
+
+        self.assertEqual(
+            paths,
+            ["old/openapi.yaml", "contracts/openapi.yaml"],
+        )
+
+    def test_get_commit_changed_files_handles_empty_commit_diff_array(self) -> None:
+        from integrations.gitlab_adapter import get_commit_changed_files
+        from runtime.http_client import HttpResponse
+
+        url = "https://itgitlab.xylink.com/api/v4/projects/group%2Fmeeting-control-service/repository/commits/abc123/diff"
+        transport = FakeTransport(
+            {
+                ("GET", url): HttpResponse(
+                    status=200,
+                    headers={},
+                    body=b"[]",
+                    url=url,
+                )
+            }
+        )
+
+        paths = get_commit_changed_files(
+            "https://itgitlab.xylink.com/group/meeting-control-service.git",
+            "abc123",
+            environ={"ITGITLAB_ACCESS_TOKEN": "it-secret-token"},
+            transport=transport,
+        )
+
+        self.assertEqual(paths, [])
+
+    def test_get_commit_changed_files_rejects_non_array_diff_payload(self) -> None:
+        from integrations.gitlab_adapter import get_commit_changed_files
+        from runtime.http_client import HttpResponse
+
+        url = "https://itgitlab.xylink.com/api/v4/projects/group%2Fmeeting-control-service/repository/commits/abc123/diff"
+        transport = FakeTransport(
+            {
+                ("GET", url): HttpResponse(
+                    status=200,
+                    headers={},
+                    body=json.dumps({"message": "not an array"}).encode("utf-8"),
+                    url=url,
+                )
+            }
+        )
+
+        with self.assertRaises(ValueError):
+            get_commit_changed_files(
+                "https://itgitlab.xylink.com/group/meeting-control-service.git",
+                "abc123",
+                environ={"ITGITLAB_ACCESS_TOKEN": "it-secret-token"},
+                transport=transport,
+            )
+
+    def test_get_commit_changed_files_rejects_blank_commit_sha(self) -> None:
+        from integrations.gitlab_adapter import get_commit_changed_files
+
+        with self.assertRaises(ValueError):
+            get_commit_changed_files(
+                "https://itgitlab.xylink.com/group/meeting-control-service.git",
+                "",
+                environ={"ITGITLAB_ACCESS_TOKEN": "it-secret-token"},
+            )
+
+    def test_get_commit_changed_files_keeps_old_path_for_deleted_file(self) -> None:
+        from integrations.gitlab_adapter import get_commit_changed_files
+        from runtime.http_client import HttpResponse
+
+        transport = FakeTransport(
+            {
+                (
+                    "GET",
+                    "https://itgitlab.xylink.com/api/v4/projects/group%2Fmeeting-control-service/repository/commits/abc123/diff",
+                ): HttpResponse(
+                    status=200,
+                    headers={},
+                    body=json.dumps(
+                        [
+                            {
+                                "old_path": "pyproject.toml",
+                                "new_path": "pyproject.toml",
+                                "deleted_file": True,
+                                "renamed_file": False,
+                            }
+                        ]
+                    ).encode("utf-8"),
+                    url="https://itgitlab.xylink.com/api/v4/projects/group%2Fmeeting-control-service/repository/commits/abc123/diff",
+                )
+            }
+        )
+
+        paths = get_commit_changed_files(
+            "git@itgitlab.xylink.com:group/meeting-control-service.git",
+            "abc123",
+            environ={"ITGITLAB_ACCESS_TOKEN": "it-secret-token"},
+            transport=transport,
+        )
+
+        self.assertEqual(paths, ["pyproject.toml"])
+
 
 class SyncTopologyTest(ContextHubTestCase):
     def write_system_yaml(self, content: str) -> None:

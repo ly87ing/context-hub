@@ -256,6 +256,53 @@ def get_file_raw(
     return response
 
 
+def get_commit_changed_files(
+    gitlab_url: str,
+    commit_sha: str,
+    *,
+    client: HttpClient | None = None,
+    environ: Mapping[str, str] | None = None,
+    token: str | None = None,
+    transport: Transport | None = None,
+    timeout: float = 10.0,
+) -> list[str]:
+    commit = str(commit_sha or "").strip()
+    if not commit:
+        raise ValueError("missing commit SHA")
+
+    resolved_client = client or build_client(
+        gitlab_url,
+        environ=environ,
+        token=token,
+        transport=transport,
+        timeout=timeout,
+    )
+    project_identifier = quote(normalize_repo_url(gitlab_url)["path_with_namespace"], safe="")
+    response = resolved_client.get(
+        f"/projects/{project_identifier}/repository/commits/{quote(commit, safe='')}/diff"
+    )
+    payload = response.body.decode("utf-8") if response.body else "[]"
+    records = json.loads(payload or "[]")
+    if not isinstance(records, list):
+        raise ValueError("commit diff payload must be a JSON array")
+
+    changed_files: list[str] = []
+    seen: set[str] = set()
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        for key in ("old_path", "new_path"):
+            path = record.get(key)
+            if not path:
+                continue
+            path_str = str(path)
+            if path_str in seen:
+                continue
+            seen.add(path_str)
+            changed_files.append(path_str)
+    return changed_files
+
+
 def preflight_gitlab(
     gitlab_url: str | None = None,
     environ: Mapping[str, str] | None = None,
