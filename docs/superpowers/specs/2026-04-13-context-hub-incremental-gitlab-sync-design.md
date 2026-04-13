@@ -96,20 +96,42 @@ repo URL 在进入匹配逻辑前统一规范化为：
 当 repo 匹配到某个 service 后：
 
 - 只有 `gitlab_branch == service.default_branch` 时才允许刷新该 service
-- 如果 `default_branch` 缺失，则沿用现有 GitLab 扫描逻辑去发现它，但 webhook gating 仍应以“系统当前记录的 default_branch”为第一依据
+- 如果 `default_branch` 缺失，则 webhook 增量路径直接 `skip`
+- `default_branch` 的补齐和纠偏交给 nightly 全量同步完成
 
-### 4.3 skip 行为
+### 4.3 多 service / monorepo 行为
+
+同一个规范化 repo 可能对应多个 service。为避免把数据模型强行改成单值映射，本次定义为：
+
+- `repo -> services[]`，而不是 `repo -> service`
+- 增量路径会找出所有 repo 命中的 service
+- 对每个命中的 service 单独执行 branch gating
+- 最终只刷新 branch 放行的那部分 service
+
+这意味着：
+
+- monorepo 是允许的
+- 不会因为同 repo 多 service 就直接报错
+- 结果契约必须能表达 `matched_services` 和 `synced_services`
+
+### 4.4 skip 行为
 
 以下场景都不应报错中断：
 
 1. repo URL 没匹配到任何 service
 2. repo 匹配成功，但 branch 不等于该 service 的 `default_branch`
+3. repo 匹配成功，但某个 service 缺少 `default_branch`
 
 这两类情况都应该：
 
-- 不修改 `system.yaml`
+- 不触发对应 service 的 GitLab 增量 enrichment 写入
 - 返回明确的 skip reason
 - 允许调用方继续执行后续审计逻辑
+
+这里要明确区分两层行为：
+
+- `refresh_context.py` 作为 orchestrator，仍然会先运行 team export 聚合，这一步可能重写 `topology/system.yaml`
+- “不修改 `system.yaml`”在本次特性中具体指：skip 场景不应额外改写 GitLab 增量 enrichment 的 service 字段
 
 ## 5. 运行时设计
 
@@ -125,18 +147,32 @@ repo URL 在进入匹配逻辑前统一规范化为：
 建议新增的内部能力：
 
 - `normalize_repo_url(repo_url) -> {host, path_with_namespace}`
-- `find_service_by_repo(system_payload, repo_url) -> (service_name, service_dict) | None`
+- `find_services_by_repo(system_payload, repo_url) -> list[(service_name, service_dict)]`
 - `should_sync_service_for_branch(service, branch) -> bool`
-- `sync_single_service(hub_root, repo_url, branch) -> result`
+- `sync_services_for_repo(hub_root, repo_url, branch) -> result`
 
 增量 result 至少包含：
 
 - `mode`: `incremental`
-- `matched`: bool
-- `synced`: bool
-- `service_name`: optional
+- `matched_services`: list[str]
+- `synced_services`: list[str]
 - `reason`: optional
 - `system_path`
+
+### 5.1.1 URL 规范化放置位置
+
+repo URL 规范化不能只存在于匹配层，还必须覆盖 GitLab API 调用层。
+
+本次明确要求：
+
+- 将 repo URL normalization 下沉到共享 helper
+- 优先放在 `integrations/gitlab_adapter.py`，或由其调用的公共 helper 中
+- `sync_topology.py` 与 `gitlab_adapter.py` 都复用同一套 canonicalization 规则
+
+这样可以保证：
+
+- service.repo 是 SSH、webhook 输入是 HTTPS 时仍能命中
+- 命中后 GitLab adapter 也能正确构造 API 调用，而不是只在匹配层兼容 SSH
 
 ### 5.2 `refresh_context.py`
 
@@ -154,6 +190,11 @@ repo URL 在进入匹配逻辑前统一规范化为：
 - ONES sync
 - `check_consistency.py` / `check_stale.py`
 - warning 阻断 `auto-commit`
+
+这里也明确：
+
+- webhook 增量模式只缩小 GitLab enrichment 的作用域
+- team export 聚合仍保持 hub-scoped，不引入 service-scoped export aggregation
 
 ### 5.3 `.gitlab-ci.yml`
 
@@ -176,6 +217,13 @@ script:
   - python3 scripts/refresh_context.py . --sync-gitlab --sync-ones --auto-commit --auto-push
 ```
 
+Webhook job 的触发前提也要收紧为同时拥有：
+
+- `TRIGGER_REPO`
+- `TRIGGER_BRANCH`
+
+缺少任一变量都不应进入增量同步 job。
+
 ## 6. 安全与失败处理
 
 ### 6.1 自动提交边界
@@ -191,12 +239,13 @@ repo-scoped sync 即使只命中一个 service，也仍然必须遵守：
 以下情况应报明确错误：
 
 - `--gitlab-url` 无法解析
-- `--sync-gitlab` 启用增量模式但 branch 参数为空且调用方要求 branch gating
+- `--sync-gitlab` 启用增量模式但 branch 参数为空
 
 以下情况应只 skip，不算错误：
 
 - repo 未匹配到 service
 - branch 不等于 `default_branch`
+- service 缺少 `default_branch`
 
 ### 6.3 与现有 full sync 的关系
 
@@ -220,11 +269,13 @@ nightly 仍是最终兜底：
 
 - 只刷新匹配 repo 的 service
 - 不影响未匹配 service
+- 同 repo 多 service 时，只刷新命中的那组 service
 
 ### 7.3 branch gating
 
 - branch 等于 `default_branch` 时执行刷新
 - branch 不等于 `default_branch` 时跳过，并返回 skip reason
+- `default_branch` 缺失时跳过，并返回 skip reason
 
 ### 7.4 refresh 编排
 
@@ -241,7 +292,7 @@ nightly 仍是最终兜底：
 
 满足以下条件即可视为本次特性完成：
 
-1. webhook 输入完整 repo URL 与 branch 后，`context-hub` 能只刷新单个 service
+1. webhook 输入完整 repo URL 与 branch 后，`context-hub` 能只刷新命中的 service 集合
 2. SSH / HTTPS 两种 repo URL 都能正确匹配同一个 service
 3. 非 default branch 的 webhook 不会改写 `system.yaml`
 4. repo 未匹配到 service 时不会报错失败
