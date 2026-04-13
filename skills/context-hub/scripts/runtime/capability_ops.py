@@ -87,3 +87,64 @@ def ensure_capability_ownership(
     capability_entry["maintained_by"] = maintained_by
     capability_entry["contributors"] = list(contributors or DEFAULT_CONTRIBUTORS)
     return capability_entry
+
+
+def normalize_task_refs(task_refs: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    for ref in task_refs or []:
+        value = str(ref).strip()
+        if value:
+            normalized.append(value)
+    return normalized
+
+
+def ensure_capability_record(
+    domain_payload: dict,
+    capability_name: str,
+    title: str,
+    status: str,
+    *,
+    ones_tasks: list[str] | None = None,
+) -> dict:
+    for capability in domain_payload.get("capabilities", []):
+        if capability.get("name") == capability_name:
+            raise ValueError(f"能力 {capability_name} 已存在")
+
+    capability_entry = {
+        "name": capability_name,
+        "description": title,
+        "path": f"capabilities/{capability_name}/",
+        "status": status,
+    }
+    capability_entry["ones_tasks"] = normalize_task_refs(ones_tasks)
+    domain_payload.setdefault("capabilities", []).append(capability_entry)
+    return capability_entry
+
+
+def iter_capability_records(domains_payload: dict):
+    for domain_name, domain_info in (domains_payload.get("domains") or {}).items():
+        if not isinstance(domain_info, dict):
+            continue
+        for capability in domain_info.get("capabilities") or []:
+            if not isinstance(capability, dict):
+                continue
+            capability_name = capability.get("name")
+            if not capability_name:
+                continue
+            yield domain_name, capability_name, capability
+
+
+def update_capability_record(
+    capability_record: dict,
+    *,
+    status: str | None = None,
+    last_synced_at: str | None = None,
+    source_ref: str | None = None,
+) -> dict:
+    if status not in (None, ""):
+        capability_record["status"] = status
+    if last_synced_at not in (None, ""):
+        capability_record["last_synced_at"] = last_synced_at
+    if source_ref not in (None, ""):
+        capability_record["source_ref"] = source_ref
+    return capability_record

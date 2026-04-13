@@ -4,6 +4,7 @@ import json
 import sys
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 THIS_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = THIS_DIR.parent / "scripts"
@@ -11,6 +12,9 @@ for path in (THIS_DIR, SCRIPTS_DIR):
     path_str = str(path)
     if path_str not in sys.path:
         sys.path.insert(0, path_str)
+
+from test_support import ContextHubTestCase, run_script
+from yaml_compat import safe_load
 
 
 class FakeTransport:
@@ -141,3 +145,95 @@ class OnesAdapterTest(unittest.TestCase):
                 "project": {"uuid": "p-1", "name": "会议控制"},
             },
         )
+
+
+class OnesSyncTest(ContextHubTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        init_result = run_script(
+            "init_context_hub.py",
+            "--output",
+            str(self.hub_dir),
+            "--name",
+            "meeting-control",
+            "--id",
+            "meeting-control",
+        )
+        self.assertEqual(init_result.returncode, 0, msg=init_result.stderr)
+
+    def test_sync_capability_status_writes_summary_and_updates_domains(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "product",
+            "--ones-task",
+            "TASK-1",
+            "--ones-task",
+            "TASK-2",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        from sync_capability_status import sync_capability_status
+
+        with patch(
+            "sync_capability_status.ones_adapter.get_task_info",
+            side_effect=[
+                {"uuid": "TASK-1", "number": 1, "name": "投票需求", "status": {"name": "进行中"}},
+                {"uuid": "TASK-2", "number": 2, "name": "验收检查", "status": {"name": "待开始"}},
+            ],
+        ), patch("sync_capability_status.utc_now_iso", return_value="2026-04-13T12:00:00Z"):
+            synced_paths = sync_capability_status(self.hub_dir)
+
+        self.assertEqual(len(synced_paths), 1)
+        summary_path = self.hub_dir / "capabilities" / "voting" / "source-summary.yaml"
+        self.assertTrue(summary_path.exists())
+
+        summary_payload = safe_load(summary_path.read_text(encoding="utf-8"))
+        self.assertEqual(summary_payload["capability"], "voting")
+        self.assertEqual(summary_payload["domain"], "product")
+        self.assertEqual(summary_payload["source_system"], "ones")
+        self.assertEqual(summary_payload["source_ref"], "TASK-1,TASK-2")
+        self.assertEqual(summary_payload["last_synced_at"], "2026-04-13T12:00:00Z")
+        self.assertEqual(summary_payload["status"], "in-progress")
+        self.assertEqual(summary_payload["items"][0]["uuid"], "TASK-1")
+        self.assertEqual(summary_payload["items"][1]["uuid"], "TASK-2")
+        self.assertIn("投票需求", summary_payload["acceptance_summary"])
+
+        domains_payload = safe_load((self.hub_dir / "topology" / "domains.yaml").read_text(encoding="utf-8"))
+        voting = domains_payload["domains"]["product"]["capabilities"][0]
+        self.assertEqual(voting["status"], "in-progress")
+        self.assertEqual(voting["last_synced_at"], "2026-04-13T12:00:00Z")
+        self.assertEqual(voting["source_ref"], "TASK-1,TASK-2")
+        self.assertEqual(voting["ones_tasks"], ["TASK-1", "TASK-2"])
+
+    def test_sync_capability_status_skips_capabilities_without_ones_tasks(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "meeting-analytics",
+            "--domain",
+            "product",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        domains_payload = safe_load((self.hub_dir / "topology" / "domains.yaml").read_text(encoding="utf-8"))
+        meeting_analytics = domains_payload["domains"]["product"]["capabilities"][0]
+        self.assertEqual(meeting_analytics["ones_tasks"], [])
+
+        from sync_capability_status import sync_capability_status
+
+        with patch("sync_capability_status.ones_adapter.get_task_info") as get_task_info, patch(
+            "sync_capability_status.utc_now_iso",
+            return_value="2026-04-13T12:00:00Z",
+        ):
+            synced_paths = sync_capability_status(self.hub_dir)
+
+        self.assertEqual(synced_paths, [])
+        self.assertFalse((self.hub_dir / "capabilities" / "meeting-analytics" / "source-summary.yaml").exists())
+        get_task_info.assert_not_called()

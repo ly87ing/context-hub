@@ -78,6 +78,33 @@ class CreateCapabilityTest(ContextHubTestCase):
             ["design", "engineering", "qa"],
         )
 
+    def test_create_capability_persists_ones_tasks_in_domains_and_spec(self) -> None:
+        result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "product",
+            "--ones-task",
+            "TASK-1",
+            "--ones-task",
+            "TASK-2",
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+        domains_payload = safe_load((self.hub_dir / "topology" / "domains.yaml").read_text())
+        capability = domains_payload["domains"]["product"]["capabilities"][0]
+        self.assertEqual(capability["ones_tasks"], ["TASK-1", "TASK-2"])
+
+        spec_path = self.hub_dir / "capabilities" / "voting" / "spec.md"
+        spec_text = spec_path.read_text(encoding="utf-8")
+        self.assertIn("ONES 关联", spec_text)
+        self.assertIn("TASK-1", spec_text)
+        self.assertIn("TASK-2", spec_text)
+
     def test_create_capability_allows_maintainer_override(self) -> None:
         result = run_script(
             "create_capability.py",

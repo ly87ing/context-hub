@@ -10,11 +10,17 @@ from pathlib import Path
 from _common import (
     load_yaml_file,
     normalize_slug,
+    unique_preserving_order,
     render_template_text,
     save_yaml_file,
     today_iso,
 )
-from runtime.capability_ops import DEFAULT_MAINTAINED_BY, ensure_capability_ownership, load_ownership_payload
+from runtime.capability_ops import (
+    DEFAULT_MAINTAINED_BY,
+    ensure_capability_ownership,
+    ensure_capability_record,
+    load_ownership_payload,
+)
 
 
 REQUIRED_FILES = ("spec.md", "design.md", "architecture.md", "testing.md")
@@ -42,22 +48,18 @@ def ensure_domain(domains_payload: dict, domain: str) -> dict:
     )
 
 
-def append_capability(domain_payload: dict, capability_name: str, title: str, status: str) -> None:
-    for capability in domain_payload.get("capabilities", []):
-        if capability.get("name") == capability_name:
-            raise ValueError(f"能力 {capability_name} 已存在")
-
-    domain_payload.setdefault("capabilities", []).append(
-        {
-            "name": capability_name,
-            "description": title,
-            "path": f"capabilities/{capability_name}/",
-            "status": status,
-        }
-    )
+def render_ones_tasks_section(ones_tasks: list[str]) -> str:
+    if not ones_tasks:
+        return "- 暂无关联 ONES 工单"
+    return "\n".join(f"- {task_ref}" for task_ref in ones_tasks)
 
 
-def render_capability_files(capability_dir: Path, template_map: dict[str, str], title: str) -> None:
+def render_capability_files(
+    capability_dir: Path,
+    template_map: dict[str, str],
+    title: str,
+    ones_tasks: list[str],
+) -> None:
     replacements = {
         "能力名称": title,
         "date": today_iso(),
@@ -67,6 +69,7 @@ def render_capability_files(capability_dir: Path, template_map: dict[str, str], 
         "branch": "main",
         "commit-hash": "待补充",
         "service/team": "待补充",
+        "ones_tasks_section": render_ones_tasks_section(ones_tasks),
     }
     capability_dir.mkdir(parents=True, exist_ok=False)
 
@@ -92,6 +95,12 @@ def main() -> int:
         default=DEFAULT_MAINTAINED_BY,
         help="capability maintained_by，默认保持 product",
     )
+    parser.add_argument(
+        "--ones-task",
+        action="append",
+        default=[],
+        help="关联的 ONES 工单引用，可重复",
+    )
     args = parser.parse_args()
 
     hub_root = Path(args.hub).resolve()
@@ -99,6 +108,7 @@ def main() -> int:
     domain_name = normalize_slug(args.domain)
     capability_title = args.title.strip() if args.title else capability_name
     maintained_by = normalize_slug(args.maintained_by)
+    ones_tasks = unique_preserving_order(task.strip() for task in args.ones_task if task.strip())
 
     template_root = hub_root / "capabilities" / "_templates"
     template_map = load_template_map(template_root)
@@ -107,12 +117,18 @@ def main() -> int:
     if capability_dir.exists():
         raise SystemExit(f"❌ 能力目录已存在: {capability_dir}")
 
-    render_capability_files(capability_dir, template_map, capability_title)
+    render_capability_files(capability_dir, template_map, capability_title, ones_tasks)
 
     domains_path = hub_root / "topology" / "domains.yaml"
     domains_payload = load_yaml_file(domains_path, {"domains": {}})
     domain_payload = ensure_domain(domains_payload, domain_name)
-    append_capability(domain_payload, capability_name, capability_title, args.status)
+    ensure_capability_record(
+        domain_payload,
+        capability_name,
+        capability_title,
+        args.status,
+        ones_tasks=ones_tasks,
+    )
     save_yaml_file(domains_path, domains_payload)
 
     ownership_path = hub_root / "topology" / "ownership.yaml"

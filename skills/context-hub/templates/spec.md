@@ -8,6 +8,11 @@
 |:--|:--|:--|
 | [MC-xxx](https://ones.internal/...) | {标题} | {状态} |
 
+## ONES 关联
+> 本节仅供阅读，实际链接以 `topology/domains.yaml` 中的 `ones_tasks` 为准，不作为回写来源。
+
+{ones_tasks_section}
+
 ## 目标
 {这个能力要达成什么业务目标}
 
