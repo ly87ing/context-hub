@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add repo-scoped GitLab incremental sync so webhook/CI can refresh exactly one service in `topology/system.yaml` using repo URL + branch, while preserving existing nightly full-sync behavior and audit safety.
+**Goal:** Add repo-scoped GitLab incremental sync so webhook/CI can refresh exactly the matched service set in `topology/system.yaml` using repo URL + branch, while preserving existing nightly full-sync behavior and audit safety.
 
 **Architecture:** Keep `refresh_context.py` as the orchestration entrypoint and extend `sync_topology.py` with a second incremental mode. Normalize repo URLs in shared GitLab helpers, match services by `host + path_with_namespace`, refresh every matched service in a monorepo-safe way, fail closed when `default_branch` is missing, and keep validation plus warning-blocked auto-commit unchanged.
 
@@ -43,7 +43,7 @@ Those remain separate follow-up work.
 - `test_refresh_context.py`: orchestration and flag handoff behavior
 - docs: user-facing contract for webhook inputs and branch gating
 
-## Task 1: Add failing tests for repo URL normalization and monorepo-safe incremental sync
+## Task 1: Add failing tests for repo URL normalization, result contract, and monorepo-safe incremental sync
 
 **Files:**
 - Modify: `skills/context-hub/tests/test_gitlab_sync.py`
@@ -84,19 +84,41 @@ def test_sync_topology_incremental_refreshes_all_services_for_same_repo(self):
     self.assertEqual(sorted(result["matched_services"]), ["api-service", "worker-service"])
 ```
 
-- [ ] **Step 4: Run tests to verify they fail**
+- [ ] **Step 4: Write the failing no-match and missing-default-branch tests**
+
+```python
+def test_sync_topology_incremental_skips_when_repo_matches_no_service(self):
+    result = sync_system_topology(self.hub_dir, repo_url="git@itgitlab.xylink.com:group/unknown.git", branch="main")
+    self.assertEqual(result["matched_services"], [])
+    self.assertEqual(result["synced_services"], [])
+
+def test_sync_topology_incremental_skips_when_default_branch_missing(self):
+    result = sync_system_topology(self.hub_dir, repo_url="git@itgitlab.xylink.com:group/service.git", branch="main")
+    self.assertIn("default_branch", result["reason"])
+```
+
+- [ ] **Step 5: Write the failing result-contract test**
+
+```python
+def test_sync_topology_incremental_returns_system_path_in_result(self):
+    result = sync_system_topology(self.hub_dir, repo_url="git@itgitlab.xylink.com:group/service.git", branch="main")
+    self.assertEqual(result["mode"], "incremental")
+    self.assertEqual(result["system_path"], (self.hub_dir / "topology" / "system.yaml").resolve())
+```
+
+- [ ] **Step 6: Run tests to verify they fail**
 
 Run: `python3 -m unittest discover -s skills/context-hub/tests -p 'test_gitlab_sync.py' -v`  
 Expected: `FAIL` because URL normalization and incremental entrypoints do not exist yet
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add skills/context-hub/tests/test_gitlab_sync.py
 git commit -m "test: define incremental gitlab sync behavior"
 ```
 
-## Task 2: Implement shared repo normalization, multi-service matching, and branch gating in `sync_topology.py`
+## Task 2: Implement shared repo normalization, multi-service matching, result contract, and branch gating in `sync_topology.py`
 
 **Files:**
 - Modify: `skills/context-hub/scripts/sync_topology.py`
@@ -130,14 +152,26 @@ if not service.get("default_branch"):
     return False, "default_branch missing"
 ```
 
-- [ ] **Step 5: Add repo-scoped sync logic without breaking full sync**
+- [ ] **Step 5: Return an explicit incremental result object**
+
+```python
+{
+    "mode": "incremental",
+    "matched_services": [...],
+    "synced_services": [...],
+    "reason": "...",
+    "system_path": system_path,
+}
+```
+
+- [ ] **Step 6: Add repo-scoped sync logic without breaking full sync**
 
 ```python
 def sync_services_for_repo(hub_root: Path, repo_url: str, branch: str | None) -> dict[str, object]:
     ...
 ```
 
-- [ ] **Step 6: Keep full sync as the default path**
+- [ ] **Step 7: Keep full sync as the default path**
 
 ```python
 def sync_system_topology(hub_root: Path, *, repo_url: str | None = None, branch: str | None = None):
@@ -146,12 +180,12 @@ def sync_system_topology(hub_root: Path, *, repo_url: str | None = None, branch:
     return sync_all_services(...)
 ```
 
-- [ ] **Step 7: Run tests to verify green**
+- [ ] **Step 8: Run tests to verify green**
 
 Run: `python3 -m unittest discover -s skills/context-hub/tests -p 'test_gitlab_sync.py' -v`  
 Expected: `OK`
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add skills/context-hub/scripts/sync_topology.py skills/context-hub/tests/test_gitlab_sync.py
@@ -192,6 +226,21 @@ def test_refresh_context_rejects_incremental_gitlab_sync_without_branch(self):
     self.assertNotEqual(result.returncode, 0)
 ```
 
+- [ ] **Step 2.6: Write the failing invalid-repo-url test**
+
+```python
+def test_refresh_context_rejects_invalid_gitlab_repo_url(self):
+    result = run_script("refresh_context.py", str(self.hub_dir), "--sync-gitlab", "--gitlab-url", "not-a-repo-url", "--gitlab-branch", "main")
+    self.assertNotEqual(result.returncode, 0)
+```
+
+- [ ] **Step 2.7: Write the failing full-sync regression test**
+
+```python
+def test_run_refresh_workflow_without_gitlab_url_keeps_full_sync_path(self):
+    ...
+```
+
 - [ ] **Step 3: Run tests to verify they fail**
 
 Run: `python3 -m unittest discover -s skills/context-hub/tests -p 'test_refresh_context.py' -v`  
@@ -211,19 +260,27 @@ if sync_gitlab and gitlab_url and not gitlab_branch:
     raise ValueError("gitlab incremental sync requires --gitlab-branch")
 ```
 
-- [ ] **Step 6: Dispatch to full or incremental sync based on presence of `gitlab_url`**
+- [ ] **Step 6: Reject invalid repo URL before dispatch**
+
+```python
+if gitlab_url:
+    gitlab_adapter.normalize_repo_url(gitlab_url)
+```
+
+- [ ] **Step 7: Dispatch to full or incremental sync based on presence of `gitlab_url`**
 
 ```python
 if sync_gitlab:
-    outputs["system"] = run_gitlab_sync(hub_root, repo_url=gitlab_url or None, branch=gitlab_branch or None)
+    gitlab_result = run_gitlab_sync(hub_root, repo_url=gitlab_url or None, branch=gitlab_branch or None)
+    outputs["system"] = gitlab_result["system_path"] if isinstance(gitlab_result, dict) else gitlab_result
 ```
 
-- [ ] **Step 7: Preserve existing validation and warning-blocked commit behavior**
+- [ ] **Step 8: Preserve existing validation and warning-blocked commit behavior**
 
 Run: `python3 -m unittest discover -s skills/context-hub/tests -p 'test_refresh_context.py' -v`  
 Expected: `OK`
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add skills/context-hub/scripts/refresh_context.py skills/context-hub/tests/test_refresh_context.py
@@ -271,7 +328,13 @@ script:
 
 - [ ] **Step 4: Run a focused smoke verification**
 
-Run: `python3 skills/context-hub/scripts/refresh_context.py /tmp/context-hub-demo --sync-gitlab --gitlab-url git@itgitlab.xylink.com:group/service.git --gitlab-branch main --dry-run`  
+Run:
+
+```bash
+python3 skills/context-hub/scripts/init_context_hub.py --output /tmp/context-hub-demo --name "Demo" --id demo
+python3 skills/context-hub/scripts/refresh_context.py /tmp/context-hub-demo --sync-gitlab --gitlab-url git@itgitlab.xylink.com:group/service.git --gitlab-branch main --dry-run
+```
+
 Expected: `DRY-RUN` output and no crash
 
 - [ ] **Step 5: Commit**
@@ -293,7 +356,7 @@ Expected: `OK`
 
 - [ ] **Step 2: Run compile verification**
 
-Run: `python3 -m py_compile skills/context-hub/scripts/sync_topology.py skills/context-hub/scripts/refresh_context.py`  
+Run: `python3 -m py_compile skills/context-hub/scripts/sync_topology.py skills/context-hub/scripts/refresh_context.py skills/context-hub/scripts/integrations/gitlab_adapter.py`  
 Expected: no output
 
 - [ ] **Step 3: Run an end-to-end smoke flow**
