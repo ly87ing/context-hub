@@ -15,7 +15,6 @@ from refresh_context import load_topology_payload, merge_system_exports, merge_s
 
 
 ENGINEERING_TEAM_IDS = ("engineering",)
-MAX_RAW_FETCHES = 4
 OPENAPI_FILENAMES = {"openapi.yaml", "openapi.yml", "swagger.yaml", "swagger.yml"}
 KEY_FILE_PRIORITY = (
     "pyproject.toml",
@@ -200,20 +199,24 @@ def infer_metadata_from_files(tree_paths: list[str], file_payloads: dict[str, st
 
     for path, payload in file_payloads.items():
         filename = Path(path).name.lower()
+        current_framework = None
+        current_depends_on: list[str] = []
         if filename == "pyproject.toml":
-            framework, depends_on = parse_python_metadata(payload)
+            current_framework, current_depends_on = parse_python_metadata(payload)
         elif filename == "package.json":
-            framework, depends_on = parse_package_json_metadata(payload)
+            current_framework, current_depends_on = parse_package_json_metadata(payload)
         elif filename == "requirements.txt":
-            framework, depends_on = parse_requirements_metadata(payload)
+            current_framework, current_depends_on = parse_requirements_metadata(payload)
         elif filename == "pom.xml":
-            framework, depends_on = parse_pom_metadata(payload)
+            current_framework, current_depends_on = parse_pom_metadata(payload)
         elif filename in {"build.gradle", "build.gradle.kts"}:
-            framework, depends_on = parse_gradle_metadata(payload)
+            current_framework, current_depends_on = parse_gradle_metadata(payload)
         elif filename == "go.mod":
-            framework, depends_on = parse_go_metadata(payload)
+            current_framework, current_depends_on = parse_go_metadata(payload)
+        if framework is None and current_framework:
+            framework = current_framework
+        depends_on.extend(current_depends_on)
 
-    lower_paths = {path.lower() for path in tree_paths}
     if any(Path(path).name.lower() in OPENAPI_FILENAMES or path.lower().endswith(".proto") for path in tree_paths):
         provides.append("api")
     elif framework in {"fastapi", "django", "flask", "spring-boot", "express", "nestjs", "gin"}:
@@ -234,7 +237,7 @@ def candidate_files_for_fetch(tree_paths: list[str]) -> list[str]:
         original = lower_lookup.get(filename)
         if original:
             selected.append(original)
-    return selected[:MAX_RAW_FETCHES]
+    return selected
 
 
 def scan_repo_summary(service: dict[str, object]) -> dict[str, object] | None:

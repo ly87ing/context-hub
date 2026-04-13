@@ -310,3 +310,62 @@ infrastructure: {}
         self.assertEqual(service["repo"], "https://gitlab.xylink.com/group/meeting-control-service.git")
         self.assertEqual(service["lang"], "unknown")
         self.assertNotIn("source_system", service)
+
+    def test_sync_topology_prefers_first_recognized_framework_when_multiple_key_files_exist(self) -> None:
+        from sync_topology import sync_system_topology
+
+        self.write_system_yaml(
+            """
+services:
+  meeting-control-service:
+    repo: https://gitlab.xylink.com/group/meeting-control-service.git
+    owner: platform
+    lang: unknown
+    framework: unknown
+    provides: []
+    depends_on: []
+infrastructure: {}
+""",
+        )
+
+        project = {
+            "id": 42,
+            "path_with_namespace": "group/meeting-control-service",
+            "default_branch": "main",
+        }
+        tree = [
+            {"path": "pyproject.toml", "type": "blob"},
+            {"path": "package.json", "type": "blob"},
+        ]
+
+        def get_file_raw(project_payload, file_path: str, **kwargs):
+            if file_path == "pyproject.toml":
+                return """
+[project]
+dependencies = [
+  "fastapi>=0.110",
+  "redis>=5.0",
+]
+"""
+            if file_path == "package.json":
+                return json.dumps(
+                    {
+                        "dependencies": {
+                            "react": "^19.0.0",
+                        }
+                    }
+                )
+            return ""
+
+        with (
+            patch("sync_topology.gitlab_adapter.lookup_project", return_value=project),
+            patch("sync_topology.gitlab_adapter.get_tree", return_value=tree),
+            patch("sync_topology.gitlab_adapter.get_file_raw", side_effect=get_file_raw),
+            patch("sync_topology.utc_now_iso", return_value="2026-04-13T12:00:00Z"),
+        ):
+            sync_system_topology(self.hub_dir)
+
+        service = self.load_system_yaml()["services"]["meeting-control-service"]
+        self.assertEqual(service["lang"], "python")
+        self.assertEqual(service["framework"], "fastapi")
+        self.assertEqual(service["depends_on"], ["redis"])
