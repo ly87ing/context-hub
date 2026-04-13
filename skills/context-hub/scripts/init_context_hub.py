@@ -26,6 +26,7 @@ SCRIPT_FILES_TO_COPY = (
     "yaml_compat.py",
     "create_capability.py",
     "refresh_context.py",
+    "sync_capability_status.py",
     "bootstrap_credentials_check.py",
     "update_llms_txt.py",
     "sync_topology.py",

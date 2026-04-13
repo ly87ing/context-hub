@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from unittest.mock import patch
 from pathlib import Path
 
 THIS_DIR = Path(__file__).resolve().parent
@@ -10,6 +11,7 @@ for path in (THIS_DIR, SCRIPTS_DIR):
     if path_str not in sys.path:
         sys.path.insert(0, path_str)
 
+import refresh_context
 from test_support import ContextHubTestCase, run_script
 from yaml_compat import safe_load
 
@@ -165,13 +167,129 @@ services:
         result = run_script("sync_topology.py", "--hub", str(self.hub_dir))
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn("Phase 1", result.stdout)
-        self.assertIn("deep scan deferred", result.stdout)
+        self.assertIn("GitLab topology sync complete", result.stdout)
 
         system_payload = safe_load((self.hub_dir / "topology" / "system.yaml").read_text(encoding="utf-8"))
         self.assertIn("meeting-control-bff", system_payload["services"])
         self.assertIn("legacy-console", system_payload["services"])
         self.assertIn("shared-redis", system_payload["infrastructure"])
+
+    def test_run_refresh_workflow_dry_run_skips_side_effects(self) -> None:
+        with (
+            patch.object(refresh_context, "refresh_shared_context") as refresh_mock,
+            patch.object(refresh_context, "run_gitlab_sync") as gitlab_mock,
+            patch.object(refresh_context, "run_ones_sync") as ones_mock,
+            patch.object(refresh_context, "auto_commit_and_push") as commit_mock,
+        ):
+            result = refresh_context.run_refresh_workflow(
+                self.hub_dir,
+                sync_gitlab=True,
+                sync_ones=True,
+                dry_run=True,
+                auto_commit=True,
+                auto_push=True,
+            )
+
+        self.assertEqual(result["warnings"], ["dry-run: skipped writes"])
+        self.assertFalse(result["committed"])
+        refresh_mock.assert_not_called()
+        gitlab_mock.assert_not_called()
+        ones_mock.assert_not_called()
+        commit_mock.assert_not_called()
+
+    def test_run_refresh_workflow_skips_commit_when_sync_warnings_exist(self) -> None:
+        topology_dir = self.hub_dir / "topology"
+        llms_path = self.hub_dir / ".context" / "llms.txt"
+        with (
+            patch.object(
+                refresh_context,
+                "refresh_shared_context",
+                return_value={
+                    "domains": topology_dir / "domains.yaml",
+                    "system": topology_dir / "system.yaml",
+                    "testing": topology_dir / "testing-sources.yaml",
+                    "llms": llms_path,
+                },
+            ) as refresh_mock,
+            patch.object(refresh_context, "run_gitlab_sync", side_effect=ValueError("gitlab unavailable")) as gitlab_mock,
+            patch.object(refresh_context, "run_ones_sync", return_value=[self.hub_dir / "capabilities" / "voting" / "source-summary.yaml"]) as ones_mock,
+            patch.object(refresh_context, "refresh_llms_txt", return_value=llms_path) as llms_mock,
+            patch.object(refresh_context, "auto_commit_and_push", return_value=True) as commit_mock,
+            patch.object(refresh_context, "run_validation_checks", return_value=[]) as validate_mock,
+        ):
+            result = refresh_context.run_refresh_workflow(
+                self.hub_dir,
+                sync_gitlab=True,
+                sync_ones=True,
+                ones_team="TEAM-UUID",
+                auto_commit=True,
+                auto_push=True,
+            )
+
+        refresh_mock.assert_called_once_with(self.hub_dir.resolve())
+        gitlab_mock.assert_called_once_with(self.hub_dir.resolve())
+        ones_mock.assert_called_once_with(self.hub_dir.resolve(), team_uuid="TEAM-UUID")
+        llms_mock.assert_called_once_with(self.hub_dir.resolve())
+        validate_mock.assert_called_once_with(self.hub_dir.resolve())
+        commit_mock.assert_not_called()
+        self.assertFalse(result["committed"])
+        self.assertEqual(result["outputs"]["llms"], llms_path)
+        self.assertIn("gitlab unavailable", result["warnings"])
+
+    def test_run_refresh_workflow_runs_validation_before_commit(self) -> None:
+        topology_dir = self.hub_dir / "topology"
+        llms_path = self.hub_dir / ".context" / "llms.txt"
+        summary_path = self.hub_dir / "capabilities" / "voting" / "source-summary.yaml"
+        with (
+            patch.object(
+                refresh_context,
+                "refresh_shared_context",
+                return_value={
+                    "domains": topology_dir / "domains.yaml",
+                    "system": topology_dir / "system.yaml",
+                    "testing": topology_dir / "testing-sources.yaml",
+                    "llms": llms_path,
+                },
+            ) as refresh_mock,
+            patch.object(refresh_context, "run_gitlab_sync", return_value=topology_dir / "system.yaml") as gitlab_mock,
+            patch.object(refresh_context, "run_ones_sync", return_value=[summary_path]) as ones_mock,
+            patch.object(refresh_context, "refresh_llms_txt", return_value=llms_path) as llms_mock,
+            patch.object(refresh_context, "run_validation_checks", return_value=[]) as validate_mock,
+            patch.object(refresh_context, "auto_commit_and_push", return_value=True) as commit_mock,
+        ):
+            result = refresh_context.run_refresh_workflow(
+                self.hub_dir,
+                sync_gitlab=True,
+                sync_ones=True,
+                auto_commit=True,
+            )
+
+        refresh_mock.assert_called_once_with(self.hub_dir.resolve())
+        gitlab_mock.assert_called_once_with(self.hub_dir.resolve())
+        ones_mock.assert_called_once_with(self.hub_dir.resolve(), team_uuid=None)
+        llms_mock.assert_called_once_with(self.hub_dir.resolve())
+        validate_mock.assert_called_once_with(self.hub_dir.resolve())
+        commit_mock.assert_called_once_with(
+            self.hub_dir.resolve(),
+            message="chore: refresh context hub",
+            push=False,
+            paths=[
+                topology_dir / "domains.yaml",
+                topology_dir / "system.yaml",
+                topology_dir / "testing-sources.yaml",
+                llms_path,
+                summary_path,
+            ],
+        )
+        self.assertTrue(result["committed"])
+
+    def test_refresh_context_dry_run_does_not_claim_files_refreshed(self) -> None:
+        result = run_script("refresh_context.py", str(self.hub_dir), "--dry-run")
+
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, msg=output)
+        self.assertIn("DRY-RUN", output)
+        self.assertNotIn("✅ 已刷新", output)
 
     def test_refresh_context_preserves_existing_topology_fields(self) -> None:
         (self.hub_dir / "topology" / "domains.yaml").write_text(

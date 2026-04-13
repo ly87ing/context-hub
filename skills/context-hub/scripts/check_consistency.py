@@ -54,11 +54,13 @@ REQUIRED_ROOT_PATHS = [
     "scripts/check_consistency.py",
     "scripts/check_stale.py",
     "scripts/sync_topology.py",
+    "scripts/sync_capability_status.py",
     "scripts/_common.py",
     "scripts/yaml_compat.py",
     "scripts/runtime",
     "scripts/runtime/__init__.py",
     "scripts/runtime/capability_ops.py",
+    "scripts/runtime/commit_ops.py",
     "scripts/runtime/hub_io.py",
     "scripts/runtime/hub_paths.py",
     "scripts/runtime/validation.py",
@@ -145,6 +147,19 @@ def check_domains_yaml(hub_root: Path, domains_payload: dict, warnings: list[str
             for required_file in REQUIRED_CAPABILITY_FILES:
                 if not (full_path / required_file).exists():
                     warnings.append(f"{cap_path} 缺少 {required_file}")
+            if capability.get("ones_tasks"):
+                summary_path = full_path / "source-summary.yaml"
+                if not summary_path.exists():
+                    warnings.append(f"{cap_path} 缺少 source-summary.yaml")
+                    continue
+                try:
+                    summary_payload = load_yaml_mapping(summary_path)
+                except ValueError as exc:
+                    warnings.append(str(exc).replace(str(hub_root), ".").replace("./", ""))
+                    continue
+                for field in ("source_system", "source_ref", "last_synced_at", "status", "items", "acceptance_summary"):
+                    if summary_payload.get(field) in ("", None, []):
+                        warnings.append(f"{cap_path}/source-summary.yaml 缺少 {field}")
 
 
 def check_capability_directories(hub_root: Path, domains_payload: dict, warnings: list[str]) -> None:

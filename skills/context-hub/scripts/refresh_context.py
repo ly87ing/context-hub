@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import argparse
+import subprocess
 import sys
 from pathlib import Path
 
 from _common import save_yaml_file
+from runtime.commit_ops import auto_commit_and_push
 from update_llms_txt import refresh_llms_txt
 from yaml_compat import YAMLError, safe_load
 
@@ -414,17 +417,144 @@ def refresh_shared_context(hub_root: Path) -> dict[str, Path]:
     }
 
 
+def run_gitlab_sync(hub_root: Path) -> Path:
+    from sync_topology import sync_system_topology
+
+    return sync_system_topology(hub_root)
+
+
+def run_ones_sync(hub_root: Path, *, team_uuid: str | None = None) -> list[Path]:
+    from sync_capability_status import sync_capability_statuses
+
+    return sync_capability_statuses(hub_root, team_uuid=team_uuid)
+
+
+def run_validation_checks(hub_root: Path) -> list[str]:
+    warnings: list[str] = []
+    scripts = (
+        ("check_consistency.py", "consistency audit"),
+        ("check_stale.py", "stale audit"),
+    )
+    for script_name, label in scripts:
+        script_path = Path(__file__).resolve().with_name(script_name)
+        result = subprocess.run(
+            [sys.executable, str(script_path), "--hub", str(hub_root)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        output = "\n".join(
+            part.strip()
+            for part in (result.stdout, result.stderr)
+            if part and part.strip()
+        ).strip()
+        if result.returncode == 0:
+            continue
+        if result.returncode == 1:
+            warnings.append(f"{label}: {output}")
+            continue
+        raise ValueError(output or f"{label} failed")
+    return warnings
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="refresh shared context-hub data")
+    parser.add_argument("hub", nargs="?", default=".", help="context-hub 根目录")
+    parser.add_argument("--sync-gitlab", action="store_true", help="刷新后执行 GitLab 拓扑同步")
+    parser.add_argument("--sync-ones", action="store_true", help="刷新后执行 ONES capability 同步")
+    parser.add_argument("--gitlab-url", default="", help="预留的 GitLab 入口参数")
+    parser.add_argument("--ones-team", default="", help="可选的 ONES team UUID override")
+    parser.add_argument("--dry-run", action="store_true", help="只报告计划动作，不写入文件")
+    parser.add_argument("--auto-commit", action="store_true", help="刷新后自动提交变更")
+    parser.add_argument("--auto-push", action="store_true", help="刷新后自动推送变更")
+    return parser.parse_args()
+
+
+def run_refresh_workflow(
+    hub_root: Path,
+    *,
+    sync_gitlab: bool = False,
+    sync_ones: bool = False,
+    ones_team: str | None = None,
+    dry_run: bool = False,
+    auto_commit: bool = False,
+    auto_push: bool = False,
+) -> dict[str, object]:
+    hub_root = Path(hub_root).resolve()
+    if dry_run:
+        outputs = {
+            "domains": hub_root / "topology" / "domains.yaml",
+            "system": hub_root / "topology" / "system.yaml",
+            "testing": hub_root / "topology" / "testing-sources.yaml",
+            "llms": hub_root / ".context" / "llms.txt",
+        }
+        return {"outputs": outputs, "warnings": ["dry-run: skipped writes"], "committed": False, "dry_run": True}
+
+    outputs = refresh_shared_context(hub_root)
+    warnings: list[str] = []
+    commit_paths = [Path(outputs[name]) for name in ("domains", "system", "testing", "llms")]
+
+    if sync_gitlab:
+        try:
+            outputs["system"] = run_gitlab_sync(hub_root)
+        except ValueError as exc:
+            warnings.append(str(exc))
+        else:
+            commit_paths[1] = Path(outputs["system"])
+
+    if sync_ones:
+        try:
+            ones_paths = run_ones_sync(hub_root, team_uuid=ones_team or None)
+        except ValueError as exc:
+            warnings.append(str(exc))
+        else:
+            commit_paths.extend(Path(path) for path in ones_paths)
+
+    outputs["llms"] = refresh_llms_txt(hub_root)
+    commit_paths[3] = Path(outputs["llms"])
+    warnings.extend(run_validation_checks(hub_root))
+
+    committed = False
+    if auto_commit or auto_push:
+        if warnings:
+            warnings.append("auto-commit skipped because warnings were reported")
+            return {"outputs": outputs, "warnings": warnings, "committed": False, "dry_run": False}
+        committed = auto_commit_and_push(
+            hub_root,
+            message="chore: refresh context hub",
+            push=auto_push,
+            paths=commit_paths,
+        )
+
+    return {"outputs": outputs, "warnings": warnings, "committed": committed, "dry_run": False}
+
+
 def main() -> int:
-    hub_root = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path.cwd()
+    args = parse_args()
+    hub_root = Path(args.hub).resolve()
     try:
-        outputs = refresh_shared_context(hub_root)
+        result = run_refresh_workflow(
+            hub_root,
+            sync_gitlab=args.sync_gitlab,
+            sync_ones=args.sync_ones,
+            ones_team=args.ones_team or None,
+            dry_run=args.dry_run,
+            auto_commit=args.auto_commit,
+            auto_push=args.auto_push,
+        )
     except (UnsupportedExportSchemaError, ExportConflictError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    print(f"✅ 已刷新 {outputs['domains']}")
-    print(f"✅ 已刷新 {outputs['system']}")
-    print(f"✅ 已刷新 {outputs['testing']}")
-    print(f"✅ 已刷新 {outputs['llms']}")
+    outputs = result["outputs"]
+    prefix = "DRY-RUN 将刷新" if result.get("dry_run") else "✅ 已刷新"
+    print(f"{prefix} {outputs['domains']}")
+    print(f"{prefix} {outputs['system']}")
+    print(f"{prefix} {outputs['testing']}")
+    print(f"{prefix} {outputs['llms']}")
+    for warning in result["warnings"]:
+        print(f"⚠️  {warning}")
+    if result["committed"]:
+        print("✅ 已自动提交/推送刷新结果")
     return 0
 
 

@@ -11,6 +11,7 @@ for path in (THIS_DIR, SCRIPTS_DIR):
         sys.path.insert(0, path_str)
 
 from test_support import ContextHubTestCase, run_script
+from yaml_compat import safe_dump, safe_load
 
 
 class CheckStaleTest(ContextHubTestCase):
@@ -122,3 +123,31 @@ services:
         self.assertEqual(result.returncode, 2, msg=output)
         self.assertIn("已 stale", output)
         self.assertIn("缺少关键文件", output)
+
+    def test_stale_warns_when_capability_ones_sync_is_outdated(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "product",
+            "--ones-task",
+            "TASK-1",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        domains_path = self.hub_dir / "topology" / "domains.yaml"
+        payload = safe_load(domains_path.read_text(encoding="utf-8"))
+        payload["domains"]["product"]["capabilities"][0]["last_synced_at"] = "2000-01-01T00:00:00Z"
+        domains_path.write_text(
+            safe_dump(payload, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        result = run_script("check_stale.py", "--warn-days", "30", cwd=self.hub_dir)
+
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, msg=output)
+        self.assertIn("capability voting 已 stale", output)

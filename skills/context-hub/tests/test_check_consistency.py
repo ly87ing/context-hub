@@ -151,6 +151,26 @@ services:
         self.assertIn("缺少 export metadata", output)
         self.assertIn("⚠️  警告:", output)
 
+    def test_consistency_warns_when_capability_missing_source_summary(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "product",
+            "--ones-task",
+            "TASK-1",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        result = run_script("check_consistency.py", cwd=self.hub_dir)
+
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, msg=output)
+        self.assertIn("capabilities/voting/ 缺少 source-summary.yaml", output)
+
     def test_validation_rejects_ownership_yaml_without_yaml_parser(self) -> None:
         ownership_path = self.hub_dir / "topology" / "ownership.yaml"
         ownership_path.write_text(

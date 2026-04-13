@@ -57,6 +57,7 @@ class CreateCapabilityTest(ContextHubTestCase):
                 "description": "voting",
                 "path": "capabilities/voting/",
                 "status": "planned",
+                "ones_tasks": [],
             },
         )
 

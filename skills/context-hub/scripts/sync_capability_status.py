@@ -86,7 +86,7 @@ def write_source_summary(capability_dir: Path, payload: dict[str, object]) -> Pa
     return summary_path
 
 
-def sync_capability_status(hub_root: Path) -> list[Path]:
+def sync_capability_statuses(hub_root: Path, *, team_uuid: str | None = None) -> list[Path]:
     hub_root = Path(hub_root).resolve()
     domains_path = hub_root / "topology" / "domains.yaml"
     domains_payload = load_domains_payload(hub_root)
@@ -103,10 +103,11 @@ def sync_capability_status(hub_root: Path) -> list[Path]:
             continue
         task_summaries: list[dict[str, object]] = []
         for task_ref in task_refs:
-            task_info = ones_adapter.get_task_info(task_ref)
+            task_info = ones_adapter.get_task_info(task_ref, team_uuid=team_uuid)
             task_summaries.append(ones_adapter.summarize_task(task_info))
 
-        capability_dir = hub_root / "capabilities" / capability_name
+        capability_path = str(capability.get("path") or f"capabilities/{capability_name}/").strip().rstrip("/")
+        capability_dir = hub_root / capability_path
         capability_dir.mkdir(parents=True, exist_ok=True)
         last_synced_at = utc_now_iso()
         source_ref = ",".join(task_refs)
@@ -132,9 +133,14 @@ def sync_capability_status(hub_root: Path) -> list[Path]:
     return synced_paths
 
 
+def sync_capability_status(hub_root: Path) -> list[Path]:
+    return sync_capability_statuses(hub_root)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="同步 capability 的 ONES 状态摘要")
     parser.add_argument("--hub", default=".", help="context-hub 根目录")
+    parser.add_argument("--ones-team", default="", help="可选的 ONES team UUID override")
     return parser.parse_args()
 
 
@@ -142,7 +148,7 @@ def main() -> int:
     args = parse_args()
     hub_root = resolve_hub_root(__file__, args.hub)
     try:
-        sync_capability_status(hub_root)
+        sync_capability_statuses(hub_root, team_uuid=args.ones_team or None)
     except ValueError as exc:
         print(f"ERROR: {exc}")
         return 1

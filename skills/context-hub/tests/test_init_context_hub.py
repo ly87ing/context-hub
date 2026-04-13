@@ -46,6 +46,8 @@ class InitContextHubTest(ContextHubTestCase):
         self.assertTrue((self.hub_dir / "teams" / "design" / "exports").exists())
         self.assertTrue((self.hub_dir / "teams" / "engineering" / "exports").exists())
         self.assertTrue((self.hub_dir / "teams" / "qa" / "exports").exists())
+        self.assertTrue((self.hub_dir / "scripts" / "sync_capability_status.py").exists())
+        self.assertTrue((self.hub_dir / "scripts" / "runtime" / "commit_ops.py").exists())
 
     def test_init_dry_run_reports_actions_without_writing(self) -> None:
         result = run_script(

@@ -14,7 +14,7 @@ for path in (THIS_DIR, SCRIPTS_DIR):
         sys.path.insert(0, path_str)
 
 from test_support import ContextHubTestCase, run_script
-from yaml_compat import safe_load
+from yaml_compat import safe_dump, safe_load
 
 
 class FakeTransport:
@@ -237,3 +237,62 @@ class OnesSyncTest(ContextHubTestCase):
         self.assertEqual(synced_paths, [])
         self.assertFalse((self.hub_dir / "capabilities" / "meeting-analytics" / "source-summary.yaml").exists())
         get_task_info.assert_not_called()
+
+    def test_sync_capability_status_cli_accepts_ones_team_override(self) -> None:
+        import sync_capability_status
+
+        original_argv = sys.argv[:]
+        try:
+            sys.argv = [
+                "sync_capability_status.py",
+                "--hub",
+                str(self.hub_dir),
+                "--ones-team",
+                "TEAM-1",
+            ]
+            args = sync_capability_status.parse_args()
+        finally:
+            sys.argv = original_argv
+
+        self.assertEqual(args.hub, str(self.hub_dir))
+        self.assertEqual(args.ones_team, "TEAM-1")
+
+    def test_sync_capability_status_writes_summary_to_capability_path(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "product",
+            "--ones-task",
+            "TASK-1",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        domains_path = self.hub_dir / "topology" / "domains.yaml"
+        domains_payload = safe_load(domains_path.read_text(encoding="utf-8"))
+        capability = domains_payload["domains"]["product"]["capabilities"][0]
+        capability["path"] = "capabilities/custom/voting/"
+        domains_path.write_text(
+            safe_dump(domains_payload, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+        original_dir = self.hub_dir / "capabilities" / "voting"
+        custom_dir = self.hub_dir / "capabilities" / "custom" / "voting"
+        custom_dir.parent.mkdir(parents=True, exist_ok=True)
+        original_dir.rename(custom_dir)
+
+        from sync_capability_status import sync_capability_status
+
+        with patch(
+            "sync_capability_status.ones_adapter.get_task_info",
+            return_value={"uuid": "TASK-1", "number": 1, "name": "投票需求", "status": {"name": "进行中"}},
+        ), patch("sync_capability_status.utc_now_iso", return_value="2026-04-13T12:00:00Z"):
+            synced_paths = sync_capability_status(self.hub_dir)
+
+        self.assertEqual([path.resolve() for path in synced_paths], [(custom_dir / "source-summary.yaml").resolve()])
+        self.assertTrue((custom_dir / "source-summary.yaml").exists())
+        self.assertFalse((self.hub_dir / "capabilities" / "voting" / "source-summary.yaml").exists())

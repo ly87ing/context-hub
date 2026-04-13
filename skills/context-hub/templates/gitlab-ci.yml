@@ -21,8 +21,7 @@ sync-on-webhook:
   rules:
     - if: $TRIGGER_REPO  # 由 GitLab Webhook 触发时传入仓库名
   script:
-    - pip install pyyaml requests
-    - python scripts/sync_topology.py --repo=$TRIGGER_REPO
+    - python3 scripts/refresh_context.py . --sync-gitlab --auto-commit --auto-push
   tags:
     - shared
 
@@ -32,8 +31,7 @@ nightly-full-sync:
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "nightly"
   script:
-    - pip install pyyaml requests
-    - python scripts/sync_topology.py --full
+    - python3 scripts/refresh_context.py . --sync-gitlab --sync-ones --auto-commit --auto-push
   tags:
     - shared
 
@@ -43,9 +41,8 @@ weekly-consistency-check:
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "weekly"
   script:
-    - pip install pyyaml
-    - python scripts/check_consistency.py
-    - python scripts/check_stale.py --warn-days=90
+    - python3 scripts/check_consistency.py
+    - python3 scripts/check_stale.py --warn-days=90
   allow_failure: true  # 不阻塞，仅报告
   tags:
     - shared
@@ -56,7 +53,6 @@ validate-on-push:
   rules:
     - if: $CI_PIPELINE_SOURCE == "push"
   script:
-    - pip install pyyaml
-    - python scripts/check_consistency.py
+    - python3 scripts/check_consistency.py
   tags:
     - shared

@@ -110,6 +110,39 @@ def check_in_progress_capabilities(hub_root: Path, domains_payload: dict, errors
                 )
 
 
+def check_capability_sync_freshness(
+    hub_root: Path,
+    domains_payload: dict,
+    warn_days: int,
+    warnings: list[str],
+) -> None:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=warn_days)
+    now = datetime.now(timezone.utc)
+    for domain_info in (domains_payload.get("domains") or {}).values():
+        if not isinstance(domain_info, dict):
+            continue
+        for capability in domain_info.get("capabilities") or []:
+            if not isinstance(capability, dict):
+                continue
+            if not capability.get("ones_tasks"):
+                continue
+            capability_name = capability.get("name") or "unknown"
+            freshness_raw = capability.get("last_synced_at")
+            if freshness_raw in ("", None):
+                warnings.append(f"capability {capability_name} 缺少 last_synced_at")
+                continue
+            try:
+                freshness = parse_freshness(freshness_raw)
+            except ValueError:
+                warnings.append(f"capability {capability_name} last_synced_at 无法解析: {freshness_raw}")
+                continue
+            if freshness < cutoff:
+                age_days = (now - freshness).days
+                warnings.append(
+                    f"capability {capability_name} 已 stale: last_synced_at={format_freshness(freshness)}, {age_days} 天前"
+                )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="检测联邦 context-hub 的 stale 风险")
     parser.add_argument("--hub", help="context-hub 根目录，默认自动识别")
@@ -128,6 +161,7 @@ def main() -> int:
     domains_payload = load_domains_payload(hub_root, errors)
     check_stale_exports(hub_root, args.warn_days, errors, warnings)
     check_in_progress_capabilities(hub_root, domains_payload, errors)
+    check_capability_sync_freshness(hub_root, domains_payload, args.warn_days, warnings)
 
     if errors:
         print("❌ 阻塞项:")
