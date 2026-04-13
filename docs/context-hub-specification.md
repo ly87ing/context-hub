@@ -125,6 +125,7 @@
 - 可选执行 `sync_capability_status.py`
 - 写入后自动执行 `check_consistency.py` / `check_stale.py`
 - 可选执行 `auto-commit` / `auto-push`
+- webhook 增量模式支持 `--gitlab-url` + `--gitlab-branch`，只缩小 GitLab enrichment 的作用域
 
 如果 export 之间出现冲突，脚本会报错退出；如果外部同步或审计只产生 warning，脚本会保留结果但跳过自动提交。
 
@@ -137,6 +138,7 @@
 - 补全 `lang`、`framework`、`depends_on`、`provides`、`default_branch`
 - 回写 `source_system`、`source_ref`、`last_synced_at`、`confidence`
 - 保留手工维护字段，例如 `owner`、`notes`、`visibility`
+- 在 webhook 增量模式下按 repo URL 命中 service 集合，并按各自 `default_branch` 做 branch gating
 
 `sync_capability_status.py` 当前会：
 
@@ -207,6 +209,7 @@ python3 skills/context-hub/scripts/create_capability.py \
   --ones-task TASK-1
 
 python3 skills/context-hub/scripts/refresh_context.py /tmp/context-hub-demo --sync-gitlab --sync-ones
+python3 skills/context-hub/scripts/refresh_context.py /tmp/context-hub-demo --sync-gitlab --gitlab-url git@itgitlab.xylink.com:group/service.git --gitlab-branch main
 python3 skills/context-hub/scripts/bootstrap_credentials_check.py --check-ones
 python3 skills/context-hub/scripts/sync_topology.py --hub /tmp/context-hub-demo
 python3 skills/context-hub/scripts/sync_capability_status.py --hub /tmp/context-hub-demo --ones-team TEAM-UUID

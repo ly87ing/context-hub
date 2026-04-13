@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import quote, urlencode, urlparse
@@ -38,6 +39,35 @@ HOST_TO_INSTANCE = {
     urlparse(instance.base_url).hostname: instance
     for instance in GITLAB_INSTANCES.values()
 }
+SSH_REPO_PATTERN = re.compile(r"^(?P<user>[^@]+)@(?P<host>[^:]+):(?P<path>.+)$")
+
+
+def normalize_repo_url(gitlab_url: str) -> dict[str, str]:
+    normalized = str(gitlab_url or "").strip()
+    if not normalized:
+        raise ValueError("missing GitLab repo URL")
+
+    ssh_match = SSH_REPO_PATTERN.match(normalized)
+    if ssh_match:
+        host = ssh_match.group("host").strip().lower()
+        project_path = ssh_match.group("path").strip().lstrip("/")
+    else:
+        parsed = urlparse(normalized)
+        if not parsed.scheme or not parsed.netloc:
+            raise ValueError(f"invalid GitLab repo URL: {gitlab_url}")
+        host = str(parsed.hostname or "").strip().lower()
+        project_path = parsed.path.strip().lstrip("/")
+
+    if project_path.endswith(".git"):
+        project_path = project_path[:-4]
+    project_path = project_path.rstrip("/")
+    if not host or not project_path:
+        raise ValueError(f"invalid GitLab repo URL: {gitlab_url}")
+
+    return {
+        "host": host,
+        "path_with_namespace": project_path,
+    }
 
 
 def _extract_hostname(gitlab_url: str | None) -> str | None:
@@ -50,6 +80,11 @@ def _extract_hostname(gitlab_url: str | None) -> str | None:
     parsed = urlparse(normalized)
     if parsed.hostname:
         return parsed.hostname.lower()
+
+    try:
+        return normalize_repo_url(normalized)["host"]
+    except ValueError:
+        pass
 
     candidate = normalized.split("/", 1)[0]
     host = candidate.split(":", 1)[0].strip().lower()
@@ -79,15 +114,7 @@ def build_api_base(gitlab_url: str | GitLabInstance | None = None) -> str:
 
 
 def extract_project_path(gitlab_url: str) -> str:
-    normalized = gitlab_url.strip()
-    parsed = urlparse(normalized)
-    path = parsed.path if parsed.scheme or parsed.netloc else normalized
-    project_path = path.split("?", 1)[0].split("#", 1)[0].strip("/")
-    if project_path.endswith(".git"):
-        project_path = project_path[:-4]
-    if not project_path:
-        raise ValueError("missing GitLab project path")
-    return project_path
+    return normalize_repo_url(gitlab_url)["path_with_namespace"]
 
 
 def _project_identifier(project: Mapping[str, object]) -> str:

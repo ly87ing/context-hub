@@ -369,3 +369,219 @@ dependencies = [
         self.assertEqual(service["lang"], "python")
         self.assertEqual(service["framework"], "fastapi")
         self.assertEqual(service["depends_on"], ["redis"])
+
+    def test_normalize_repo_url_treats_https_and_ssh_as_same_repo(self) -> None:
+        from sync_topology import normalize_repo_url
+
+        https_url = "https://itgitlab.xylink.com/group/meeting-control-service.git"
+        ssh_url = "git@itgitlab.xylink.com:group/meeting-control-service.git"
+
+        self.assertEqual(normalize_repo_url(https_url), normalize_repo_url(ssh_url))
+
+    def test_sync_topology_incremental_returns_result_contract_for_matching_repo(self) -> None:
+        from sync_topology import sync_system_topology
+
+        self.write_system_yaml(
+            """
+services:
+  meeting-control-service:
+    repo: https://itgitlab.xylink.com/group/meeting-control-service.git
+    owner: platform
+    default_branch: main
+    lang: unknown
+    framework: unknown
+    provides: []
+    depends_on: []
+infrastructure: {}
+""",
+        )
+
+        project = {
+            "id": 42,
+            "path_with_namespace": "group/meeting-control-service",
+            "default_branch": "main",
+        }
+        tree = [{"path": "pyproject.toml", "type": "blob"}]
+
+        with (
+            patch("sync_topology.gitlab_adapter.lookup_project", return_value=project),
+            patch("sync_topology.gitlab_adapter.get_tree", return_value=tree),
+            patch("sync_topology.gitlab_adapter.get_file_raw", return_value="[project]\nname = 'meeting-control-service'\n"),
+            patch("sync_topology.utc_now_iso", return_value="2026-04-13T12:00:00Z"),
+        ):
+            result = sync_system_topology(
+                self.hub_dir,
+                repo_url="git@itgitlab.xylink.com:group/meeting-control-service.git",
+                branch="main",
+            )
+
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result["mode"], "incremental")
+        self.assertEqual(result["matched_services"], ["meeting-control-service"])
+        self.assertEqual(result["synced_services"], ["meeting-control-service"])
+        self.assertEqual(result["system_path"], (self.hub_dir / "topology" / "system.yaml").resolve())
+        self.assertIn("reason", result)
+
+    def test_sync_topology_incremental_skips_non_default_branch(self) -> None:
+        from sync_topology import sync_system_topology
+
+        self.write_system_yaml(
+            """
+services:
+  meeting-control-service:
+    repo: https://itgitlab.xylink.com/group/meeting-control-service.git
+    owner: platform
+    default_branch: main
+    lang: unknown
+    framework: unknown
+    provides: []
+    depends_on: []
+infrastructure: {}
+""",
+        )
+
+        with (
+            patch("sync_topology.gitlab_adapter.lookup_project") as lookup_project,
+            patch("sync_topology.gitlab_adapter.get_tree") as get_tree,
+            patch("sync_topology.gitlab_adapter.get_file_raw") as get_file_raw,
+            patch("sync_topology.utc_now_iso", return_value="2026-04-13T12:00:00Z"),
+        ):
+            result = sync_system_topology(
+                self.hub_dir,
+                repo_url="https://itgitlab.xylink.com/group/meeting-control-service.git",
+                branch="feature/x",
+            )
+
+        self.assertEqual(result["mode"], "incremental")
+        self.assertEqual(result["matched_services"], ["meeting-control-service"])
+        self.assertEqual(result["synced_services"], [])
+        self.assertIn("default_branch", str(result["reason"]))
+        self.assertFalse(lookup_project.called)
+        self.assertFalse(get_tree.called)
+        self.assertFalse(get_file_raw.called)
+
+    def test_sync_topology_incremental_refreshes_all_services_for_same_repo(self) -> None:
+        from sync_topology import sync_system_topology
+
+        self.write_system_yaml(
+            """
+services:
+  api-service:
+    repo: git@itgitlab.xylink.com:group/mono.git
+    owner: platform
+    default_branch: main
+    lang: unknown
+    framework: unknown
+    provides: []
+    depends_on: []
+  worker-service:
+    repo: https://itgitlab.xylink.com/group/mono.git
+    owner: platform
+    default_branch: main
+    lang: unknown
+    framework: unknown
+    provides: []
+    depends_on: []
+infrastructure: {}
+""",
+        )
+
+        project = {
+            "id": 84,
+            "path_with_namespace": "group/mono",
+            "default_branch": "main",
+        }
+        tree = [{"path": "pyproject.toml", "type": "blob"}]
+
+        with (
+            patch("sync_topology.gitlab_adapter.lookup_project", return_value=project),
+            patch("sync_topology.gitlab_adapter.get_tree", return_value=tree),
+            patch("sync_topology.gitlab_adapter.get_file_raw", return_value="[project]\nname = 'mono'\n"),
+            patch("sync_topology.utc_now_iso", return_value="2026-04-13T12:00:00Z"),
+        ):
+            result = sync_system_topology(
+                self.hub_dir,
+                repo_url="git@itgitlab.xylink.com:group/mono.git",
+                branch="main",
+            )
+
+        self.assertEqual(result["mode"], "incremental")
+        self.assertCountEqual(result["matched_services"], ["api-service", "worker-service"])
+        self.assertCountEqual(result["synced_services"], ["api-service", "worker-service"])
+        self.assertEqual(result["system_path"], (self.hub_dir / "topology" / "system.yaml").resolve())
+
+    def test_sync_topology_incremental_skips_when_repo_matches_no_service(self) -> None:
+        from sync_topology import sync_system_topology
+
+        self.write_system_yaml(
+            """
+services:
+  meeting-control-service:
+    repo: https://itgitlab.xylink.com/group/meeting-control-service.git
+    owner: platform
+    default_branch: main
+    lang: unknown
+    framework: unknown
+    provides: []
+    depends_on: []
+infrastructure: {}
+""",
+        )
+
+        with (
+            patch("sync_topology.gitlab_adapter.lookup_project") as lookup_project,
+            patch("sync_topology.gitlab_adapter.get_tree") as get_tree,
+            patch("sync_topology.gitlab_adapter.get_file_raw") as get_file_raw,
+            patch("sync_topology.utc_now_iso", return_value="2026-04-13T12:00:00Z"),
+        ):
+            result = sync_system_topology(
+                self.hub_dir,
+                repo_url="git@itgitlab.xylink.com:group/unknown.git",
+                branch="main",
+            )
+
+        self.assertEqual(result["mode"], "incremental")
+        self.assertEqual(result["matched_services"], [])
+        self.assertEqual(result["synced_services"], [])
+        self.assertTrue(result["reason"])
+        self.assertIn("match", str(result["reason"]).lower())
+        self.assertFalse(lookup_project.called)
+        self.assertFalse(get_tree.called)
+        self.assertFalse(get_file_raw.called)
+
+    def test_sync_topology_incremental_skips_when_default_branch_missing(self) -> None:
+        from sync_topology import sync_system_topology
+
+        self.write_system_yaml(
+            """
+services:
+  meeting-control-service:
+    repo: git@itgitlab.xylink.com:group/meeting-control-service.git
+    owner: platform
+    lang: unknown
+    framework: unknown
+    provides: []
+    depends_on: []
+infrastructure: {}
+""",
+        )
+
+        with (
+            patch("sync_topology.gitlab_adapter.lookup_project") as lookup_project,
+            patch("sync_topology.gitlab_adapter.get_tree") as get_tree,
+            patch("sync_topology.gitlab_adapter.get_file_raw") as get_file_raw,
+            patch("sync_topology.utc_now_iso", return_value="2026-04-13T12:00:00Z"),
+        ):
+            result = sync_system_topology(
+                self.hub_dir,
+                repo_url="https://itgitlab.xylink.com/group/meeting-control-service.git",
+                branch="main",
+            )
+
+        self.assertEqual(result["mode"], "incremental")
+        self.assertEqual(result["matched_services"], ["meeting-control-service"])
+        self.assertEqual(result["synced_services"], [])
+        self.assertIn("default_branch", str(result["reason"]))
+        self.assertFalse(lookup_project.called)
+        self.assertFalse(get_tree.called)
+        self.assertFalse(get_file_raw.called)

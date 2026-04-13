@@ -43,6 +43,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="hub root directory, same as positional hub",
     )
+    parser.add_argument("--repo-url", default="", help="只同步指定 repo URL 对应的 service")
+    parser.add_argument("--branch", default="", help="指定 repo 的当前 branch")
     return parser.parse_args()
 
 
@@ -240,6 +242,38 @@ def candidate_files_for_fetch(tree_paths: list[str]) -> list[str]:
     return selected
 
 
+def normalize_repo_url(repo_url: str) -> dict[str, str]:
+    return gitlab_adapter.normalize_repo_url(repo_url)
+
+
+def find_services_by_repo(services: dict[str, object], repo_url: str) -> list[tuple[str, dict[str, object]]]:
+    target = normalize_repo_url(repo_url)
+    matches: list[tuple[str, dict[str, object]]] = []
+    for service_name, service in services.items():
+        if not isinstance(service, dict):
+            continue
+        service_repo = str(service.get("repo") or "").strip()
+        if not service_repo:
+            continue
+        try:
+            normalized_service_repo = normalize_repo_url(service_repo)
+        except ValueError:
+            continue
+        if normalized_service_repo == target:
+            matches.append((service_name, service))
+    return matches
+
+
+def should_sync_service_for_branch(service: dict[str, object], branch: str | None) -> tuple[bool, str]:
+    normalized_branch = str(branch or "").strip()
+    default_branch = str(service.get("default_branch") or "").strip()
+    if not default_branch:
+        return False, "default_branch missing"
+    if normalized_branch != default_branch:
+        return False, f"branch {normalized_branch or '<empty>'} does not match default_branch {default_branch}"
+    return True, ""
+
+
 def scan_repo_summary(service: dict[str, object]) -> dict[str, object] | None:
     repo_url = str(service.get("repo") or "").strip()
     if not repo_url:
@@ -289,7 +323,7 @@ def merge_service_summary(existing: dict[str, object], summary: dict[str, object
     return merged
 
 
-def sync_system_topology(hub_root: Path) -> Path:
+def sync_all_services(hub_root: Path) -> Path:
     hub_root = Path(hub_root).resolve()
     topology_dir = hub_root / "topology"
     topology_dir.mkdir(parents=True, exist_ok=True)
@@ -312,16 +346,86 @@ def sync_system_topology(hub_root: Path) -> Path:
     return system_path
 
 
+def sync_services_for_repo(hub_root: Path, repo_url: str, branch: str | None) -> dict[str, object]:
+    hub_root = Path(hub_root).resolve()
+    topology_dir = hub_root / "topology"
+    topology_dir.mkdir(parents=True, exist_ok=True)
+
+    normalize_repo_url(repo_url)
+
+    system_path = topology_dir / "system.yaml"
+    existing_payload = load_topology_payload(system_path, {"services": {}, "infrastructure": {}})
+    export_payload = merge_system_exports(hub_root, team_ids=ENGINEERING_TEAM_IDS)
+    system_payload = merge_system_payload(existing_payload, export_payload)
+
+    services = system_payload.get("services") or {}
+    matched = find_services_by_repo(services, repo_url)
+    matched_service_names = [service_name for service_name, _ in matched]
+    synced_service_names: list[str] = []
+    reasons: list[str] = []
+
+    if not matched:
+        save_yaml_file(system_path, system_payload)
+        return {
+            "mode": "incremental",
+            "matched_services": [],
+            "synced_services": [],
+            "reason": "no service match for repo URL",
+            "system_path": system_path.resolve(),
+        }
+
+    for service_name, service in matched:
+        should_sync, reason = should_sync_service_for_branch(service, branch)
+        if not should_sync:
+            reasons.append(f"{service_name}: {reason}")
+            continue
+        summary = scan_repo_summary(service)
+        if summary is None:
+            reasons.append(f"{service_name}: gitlab scan skipped")
+            continue
+        services[service_name] = merge_service_summary(service, summary)
+        synced_service_names.append(service_name)
+
+    save_yaml_file(system_path, system_payload)
+    return {
+        "mode": "incremental",
+        "matched_services": matched_service_names,
+        "synced_services": synced_service_names,
+        "reason": "; ".join(reasons),
+        "system_path": system_path.resolve(),
+    }
+
+
+def sync_system_topology(
+    hub_root: Path,
+    *,
+    repo_url: str | None = None,
+    branch: str | None = None,
+) -> Path | dict[str, object]:
+    if repo_url:
+        return sync_services_for_repo(hub_root, repo_url, branch)
+    return sync_all_services(hub_root)
+
+
 def main() -> int:
     args = parse_args()
     hub_root = Path(args.hub_flag or args.hub or ".").resolve()
     try:
-        system_path = sync_system_topology(hub_root)
+        result = sync_system_topology(
+            hub_root,
+            repo_url=args.repo_url or None,
+            branch=args.branch or None,
+        )
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
-    print(f"GitLab topology sync complete: {system_path}")
+    if isinstance(result, dict):
+        print(f"GitLab topology sync complete: {result['system_path']}")
+        if result.get("reason"):
+            print(f"GitLab topology sync note: {result['reason']}")
+    else:
+        print(f"GitLab topology sync complete: {result}")
     return 0
 
 

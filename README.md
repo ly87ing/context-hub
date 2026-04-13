@@ -61,6 +61,7 @@ python3 skills/context-hub/scripts/create_capability.py \
   --ones-task TASK-1
 
 python3 skills/context-hub/scripts/refresh_context.py /tmp/meeting-control-hub --sync-gitlab --sync-ones
+python3 skills/context-hub/scripts/refresh_context.py /tmp/meeting-control-hub --sync-gitlab --gitlab-url git@itgitlab.xylink.com:group/service.git --gitlab-branch main
 python3 skills/context-hub/scripts/bootstrap_credentials_check.py --check-ones
 python3 skills/context-hub/scripts/sync_topology.py --hub /tmp/meeting-control-hub
 python3 skills/context-hub/scripts/sync_capability_status.py --hub /tmp/meeting-control-hub --ones-team TEAM-UUID
@@ -73,6 +74,7 @@ python3 skills/context-hub/scripts/check_stale.py --hub /tmp/meeting-control-hub
 - `init_context_hub.py` 在新 hub 中生成共享目录、模板、`scripts/runtime/`、`scripts/integrations/` 以及后续维护脚本
 - `create_capability.py` 维护 capability 文档骨架、`domains.yaml`、`ownership.yaml` 和 `ones_tasks`
 - `refresh_context.py` 负责编排 team export 聚合、可选 GitLab / ONES 同步、最小审计，以及可选 `auto-commit` / `auto-push`
+- webhook 增量模式要求同时传入完整 `repo URL` 与 `branch`，并按每个 service 自己的 `default_branch` 决定是否刷新
 - `bootstrap_credentials_check.py` 只报告 GitLab / ONES 凭据是否就绪
 - `sync_topology.py` 读取 engineering repo 并补全 `lang`、`framework`、`depends_on`、`provides` 等自动字段
 - `sync_capability_status.py` 根据 `topology/domains.yaml` 中的 `ones_tasks` 生成 `source-summary.yaml` 并回写 capability 状态
