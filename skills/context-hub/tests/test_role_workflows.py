@@ -353,3 +353,92 @@ class PMWorkflowTest(ContextHubTestCase):
 
         self.assertEqual(result["live_status"], "fallback_to_hub")
         self.assertIn("未实时校验", result["warnings"][0])
+
+
+class DesignWorkflowTest(ContextHubTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        init_result = run_script(
+            "init_context_hub.py",
+            "--output",
+            str(self.hub_dir),
+            "--name",
+            "meeting-control",
+            "--id",
+            "meeting-control",
+        )
+        self.assertEqual(init_result.returncode, 0, msg=init_result.stderr)
+
+    def test_run_design_workflow_align_returns_live_ok_when_figma_probe_succeeds(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "meeting",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        draft_path = self.workdir / "design-align-draft.md"
+        draft_text = "# voting design\n\n- align states\n"
+        draft_path.write_text(draft_text, encoding="utf-8")
+
+        from runtime.http_client import HttpResponse
+        from workflows.design_workflow import run_design_workflow
+
+        def transport(request):
+            return HttpResponse(status=200, headers={}, body=b"ok", url=request.url)
+
+        result = run_design_workflow(
+            hub_root=self.hub_dir,
+            capability="voting",
+            action="align",
+            content_file=draft_path,
+            figma_url="https://www.figma.com/design/FILE123/Voting?node-id=12-34",
+            transport=transport,
+        )
+
+        self.assertEqual(result["role"], "design")
+        self.assertEqual(result["live_status"], "live_ok")
+        self.assertIn(str(draft_path), result["used_sources"])
+        self.assertIn(
+            "https://www.figma.com/design/FILE123/Voting?node-id=12-34",
+            result["used_sources"],
+        )
+
+        design_path = self.hub_dir / "capabilities" / "voting" / "design.md"
+        self.assertEqual(design_path.read_text(encoding="utf-8"), draft_text)
+
+    def test_run_design_workflow_align_falls_back_to_hub_without_live_figma_validation(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "meeting",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        draft_path = self.workdir / "design-fallback-draft.md"
+        draft_text = "# fallback design\n"
+        draft_path.write_text(draft_text, encoding="utf-8")
+
+        from workflows.design_workflow import run_design_workflow
+
+        result = run_design_workflow(
+            hub_root=self.hub_dir,
+            capability="voting",
+            action="align",
+            content_file=draft_path,
+            figma_url=None,
+        )
+
+        self.assertEqual(result["live_status"], "fallback_to_hub")
+        self.assertIn("未实时校验", result["warnings"][0])
+
+        design_path = self.hub_dir / "capabilities" / "voting" / "design.md"
+        self.assertEqual(design_path.read_text(encoding="utf-8"), draft_text)
