@@ -12,6 +12,7 @@ for path in (THIS_DIR, SCRIPTS_DIR):
         sys.path.insert(0, path_str)
 
 from runtime.hub_paths import role_intake_template_path
+from runtime.capability_ops import capability_target_document_path
 from test_support import ContextHubTestCase
 from workflows.common import build_workflow_result, normalize_role, prepare_mutation_request, target_document_name
 
@@ -20,6 +21,7 @@ class RoleWorkflowContractTest(ContextHubTestCase):
     def test_normalize_role_and_target_document_name_contract(self) -> None:
         self.assertEqual(normalize_role("PM"), "pm")
         self.assertEqual(normalize_role("ux"), "design")
+        self.assertEqual(normalize_role("设计"), "design")
         self.assertEqual(normalize_role("研发"), "engineering")
         self.assertEqual(normalize_role("QA"), "qa")
 
@@ -75,3 +77,28 @@ class RoleWorkflowContractTest(ContextHubTestCase):
                 target_file=self.hub_dir / "capabilities" / "meeting-control" / "spec.md",
                 hub_root=self.hub_dir,
             )
+
+    def test_prepare_mutation_request_returns_success_contract(self) -> None:
+        request = prepare_mutation_request(
+            role="pm",
+            action="extend",
+            capability="meeting-control",
+            content_file="capabilities/meeting-control/spec-source.md",
+            target_file="capabilities/meeting-control/spec.md",
+            hub_root=self.hub_dir,
+        )
+
+        self.assertEqual(request["role"], "pm")
+        self.assertEqual(request["action"], "extend")
+        self.assertEqual(request["capability"], "meeting-control")
+        self.assertEqual(request["content_file"], self.hub_dir / "capabilities" / "meeting-control" / "spec-source.md")
+        self.assertEqual(request["target_file"], self.hub_dir / "capabilities" / "meeting-control" / "spec.md")
+        self.assertEqual(request["hub_root"], self.hub_dir)
+        self.assertIsInstance(request["hub_root"], Path)
+
+    def test_capability_target_document_path_uses_role_contract(self) -> None:
+        capability_dir = self.hub_dir / "capabilities" / "meeting-control"
+        self.assertEqual(
+            capability_target_document_path(capability_dir, "设计"),
+            capability_dir / "design.md",
+        )

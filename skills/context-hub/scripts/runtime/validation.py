@@ -31,6 +31,22 @@ FALLBACK_SCHEMA_FILENAMES = {
     "testing-fragment.yaml",
 }
 MUTATING_ACTIONS = {"create", "extend", "revise", "align"}
+ROLE_ALIASES = {
+    "pm": "pm",
+    "product": "pm",
+    "ux": "design",
+    "design": "design",
+    "设计": "design",
+    "研发": "engineering",
+    "engineering": "engineering",
+    "qa": "qa",
+}
+ROLE_TARGET_DOCUMENTS = {
+    "pm": "spec.md",
+    "design": "design.md",
+    "engineering": "architecture.md",
+    "qa": "testing.md",
+}
 
 
 def default_hub_root(script_file: str | Path) -> Path:
@@ -66,6 +82,27 @@ def relative_path(path: Path, hub_root: Path) -> str:
         return path.resolve().relative_to(hub_root.resolve()).as_posix()
     except ValueError:
         return str(path)
+
+
+def normalize_role(value: str) -> str:
+    raw_value = str(value).strip()
+    if not raw_value:
+        raise ValueError("role 不能为空")
+    normalized = ROLE_ALIASES.get(raw_value)
+    if normalized is not None:
+        return normalized
+    normalized = ROLE_ALIASES.get(raw_value.lower())
+    if normalized is not None:
+        return normalized
+    raise ValueError(f"unsupported role: {raw_value}")
+
+
+def target_document_name(role: str) -> str:
+    normalized_role = normalize_role(role)
+    try:
+        return ROLE_TARGET_DOCUMENTS[normalized_role]
+    except KeyError as exc:
+        raise ValueError(f"unsupported role: {role}") from exc
 
 
 def load_yaml_mapping(path: Path) -> dict:

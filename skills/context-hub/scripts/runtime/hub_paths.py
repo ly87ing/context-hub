@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from workflows.common import normalize_role
+from .validation import normalize_role
 
 
 def skill_root() -> Path:

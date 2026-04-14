@@ -5,7 +5,7 @@ from pathlib import Path
 from yaml_compat import YAMLError, safe_load
 
 from .hub_io import load_template, render_template
-from workflows.common import target_document_name
+from .validation import target_document_name
 
 
 DEFAULT_MAINTAINED_BY = "product"
