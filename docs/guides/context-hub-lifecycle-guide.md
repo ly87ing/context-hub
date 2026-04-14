@@ -137,6 +137,99 @@ flowchart TD
 - `lifecycle-state.yaml`：各角色当前状态、阻塞项、下一步建议。
 - `semantic-consistency.yaml`：最近一次语义一致性审计结果。
 
+### 3.3 同一个 capability 后续变更时，目录会变成什么样
+
+最容易误解的一点是：`context-hub` 不会给同一个 capability 按 iteration 再套一层目录。
+
+不会这样组织：
+
+```text
+capabilities/
+└── voting/
+    ├── sprint-12/
+    │   ├── spec.md
+    │   ├── design.md
+    │   ├── architecture.md
+    │   └── testing.md
+    └── sprint-13/
+        ├── spec.md
+        ├── design.md
+        ├── architecture.md
+        └── testing.md
+```
+
+而是始终保持一个稳定目录，把“当前正文”和“变更轨迹”收敛在一起：
+
+```text
+capabilities/
+└── voting/
+    ├── spec.md                    # 当前有效需求正文，内部追加变更记录
+    ├── design.md                  # 当前有效设计正文
+    ├── architecture.md            # 当前有效技术方案正文
+    ├── testing.md                 # 当前有效测试正文
+    ├── source-summary.yaml        # 当前关联任务摘要
+    ├── downstream-checklist.yaml  # 最近一次 PM 变更后谁还没跟进
+    ├── iteration-index.yaml       # 当前 iteration/release + 历史累计
+    ├── lifecycle-state.yaml       # 当前角色状态和阻塞
+    └── semantic-consistency.yaml  # 最近一次语义审计结果
+```
+
+可以把它理解成“一个稳定目录，里面有两类东西”：
+
+- 正文类：`spec.md`、`design.md`、`architecture.md`、`testing.md`
+- 控制面类：`source-summary.yaml`、`downstream-checklist.yaml`、`iteration-index.yaml`、`lifecycle-state.yaml`、`semantic-consistency.yaml`
+
+其中真正表达“后续变更”的，不是新建目录，而是下面这几处：
+
+- `spec.md` 的正文和变更记录
+- `iteration-index.yaml` 里的当前 `iteration` / `release`
+- `downstream-checklist.yaml` 里的待跟进角色
+- `lifecycle-state.yaml` 里的当前状态
+
+### 3.4 用一个多迭代例子看结构
+
+假设 `voting` 这个 capability 经历了三次变化：
+
+```mermaid
+flowchart LR
+    A[Sprint 12<br/>PM create spec] --> B[Sprint 12<br/>Design/Engineering/QA 首次补齐]
+    B --> C[Sprint 13<br/>新增匿名投票规则]
+    C --> D[Sprint 13<br/>Design 和 QA 跟进]
+    D --> E[Release 2026.05<br/>新增导出投票结果]
+    E --> F[Engineering 和 QA 跟进]
+```
+
+到了 `Release 2026.05` 时，目录仍然还是同一个 `capabilities/voting/`，只是文件内容已经演进成最新状态：
+
+```text
+capabilities/
+└── voting/
+    ├── spec.md
+    │   ├── 当前正文：已经包含匿名投票 + 导出结果
+    │   └── 变更记录：
+    │       - Sprint 12: 初版投票能力
+    │       - Sprint 13: 增加匿名投票规则
+    │       - Release 2026.05: 增加导出投票结果
+    ├── design.md
+    │   └── 当前正文：包含匿名态展示和导出入口设计
+    ├── architecture.md
+    │   └── 当前正文：包含导出接口和权限边界
+    ├── testing.md
+    │   └── 当前正文：包含匿名投票和导出结果的回归范围
+    ├── iteration-index.yaml
+    │   └── 当前状态：current = Release 2026.05
+    ├── downstream-checklist.yaml
+    │   └── 当前状态：记录最近一次 PM 变更后谁还未跟进
+    └── lifecycle-state.yaml
+        └── 当前状态：记录当前谁已完成、谁阻塞
+```
+
+也就是说：
+
+- 想看“现在系统应该按什么做”，看四份主文档的当前正文。
+- 想看“这个能力最近是不是又变了”，看 `iteration-index.yaml` 和 `spec.md` 的变更记录。
+- 想看“这次变更谁还没跟上”，看 `downstream-checklist.yaml` 和 `lifecycle-state.yaml`。
+
 ## 4. 每个角色在维护什么
 
 | 角色 | 主要输入 | 主要输出 | 典型动作 |
