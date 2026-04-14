@@ -10,7 +10,7 @@
 
 - 各团队只维护自己有权限且允许共享的内容
 - 共享层只保存摘要、索引、链接、ownership 和 freshness
-- 本地脚本可以初始化、聚合、同步、校验和审计这个共享层
+- 本地脚本可以初始化、聚合、同步、校验、审计并驱动 role workflow 写入这个共享层
 
 ## 2. 联邦维护模型
 
@@ -74,6 +74,7 @@
 - `scripts/check_stale.py`
 - `scripts/runtime/`
 - `scripts/integrations/`
+- `scripts/workflows/`
 
 ## 4. 当前已实现能力
 
@@ -87,7 +88,7 @@
 - `capabilities/_templates/`
 - `teams/*/exports/`
 - `.context/llms.txt`
-- `templates/` 完整模板目录
+- `templates/` 完整模板目录（含 `templates/role-intake/`）
 - `.gitlab-ci.yml`、`.gitignore`
 - `scripts/create_capability.py`
 - `scripts/refresh_context.py`
@@ -101,6 +102,7 @@
 - `scripts/yaml_compat.py`
 - `scripts/runtime/`
 - `scripts/integrations/`
+- `scripts/workflows/`
 
 ### 4.2 Capability 生命周期起点
 
@@ -112,7 +114,22 @@
 - 保存 capability 的 `ones_tasks`
 - 刷新 `.context/llms.txt`
 
-### 4.3 Shared Context 聚合与编排
+### 4.3 Role Workflow Platform v1
+
+role workflow v1 由 `SKILL.md` 和 `scripts/workflows/*.py` 共同构成：
+
+- `SKILL.md` 负责 mixed-entry 路由，按 `显式角色 > 目标文档/动作词 > capability 缺口` 推断 role
+- 动作 contract 固定为 `create` / `extend` / `revise` / `align`
+- mutating workflow 一律通过 `--content-file` 接收草稿，再由脚本负责写入目标文档
+- 外部系统读取结果统一映射为 `live_ok` / `fallback_to_hub` / `blocked`
+- `scripts/workflows/common.py` 提供 shared helper，包括 role normalization、target-file mapping、mutation request 和统一结果结构
+- `scripts/workflows/pm_workflow.py` 写 `spec.md`；只有 PM `create` 可以 bootstrap 缺失 capability
+- `scripts/workflows/design_workflow.py` 写 `design.md`；可选读取 Figma URL 并做轻量 probe
+- `scripts/workflows/engineering_workflow.py` 写 `architecture.md`；可选读取 GitLab repo 并做轻量 lookup
+- `scripts/workflows/qa_workflow.py` 写 `testing.md`；优先读取 ONES 测试任务，失败时回退到 `topology/testing-sources.yaml`
+- `scripts/workflows/maintenance_workflow.py` 只做只读审计，报告缺失文档和建议下一角色
+
+### 4.4 Shared Context 聚合与编排
 
 `refresh_context.py` 当前负责编排本地聚合与可选同步：
 
@@ -129,7 +146,7 @@
 
 如果 export 之间出现冲突，脚本会报错退出；webhook 增量模式下 `repo/branch/commit` 缺失或 GitLab changed-files 读取失败也会直接报错退出。repo 未命中、branch 不匹配、`default_branch` 缺失、空 changed files、docs-only commit 只会返回信息性 skip，不会单独升级成 warning。validation warning 或显式 error decision 仍会阻断自动提交。
 
-### 4.4 GitLab / ONES 集成基线
+### 4.5 GitLab / ONES 集成基线
 
 `sync_topology.py` 当前会：
 
@@ -150,7 +167,7 @@
 - 回写 capability 的 `status`、`last_synced_at`、`source_ref`
 - 支持 `--ones-team` 作为 team UUID override
 
-### 4.5 凭据预检
+### 4.6 凭据预检
 
 `bootstrap_credentials_check.py` 当前只做 preflight：
 
@@ -160,7 +177,7 @@
 
 它不负责真正的数据拉取或仓库扫描。
 
-### 4.6 审计
+### 4.7 审计
 
 `check_consistency.py` 会检查：
 
@@ -183,14 +200,16 @@
 当前关系可以概括为：
 
 1. 自然语言编排
-   `SKILL.md` 根据用户意图决定读哪些共享文件、是否需要补问、是否需要运行本地脚本。
-2. shared context
+   `SKILL.md` 根据用户意图决定 role / action / capability、是否需要补问、是否需要运行本地脚本。
+2. role workflow
+   `scripts/workflows/*.py` 负责确定性执行、目标文档写入和统一结构化结果输出。
+3. shared context
    AI 默认先消费共享层，而不是假设自己能访问所有源系统。
-3. team exports
+4. team exports
    当共享层需要更新时，由各团队先写各自 export，再通过 `refresh_context.py` 聚合。
-4. preflight / sync
-   如果任务需要 GitLab / ONES 事实，先用 `bootstrap_credentials_check.py` 判断是否具备条件，再按需运行 `sync_topology.py` / `sync_capability_status.py`。
-5. audit
+5. preflight / live integrations
+   如果任务需要 GitLab / ONES / Figma 事实，先用 `bootstrap_credentials_check.py` 判断是否具备条件，再按需运行 workflow lookup 或 `sync_topology.py` / `sync_capability_status.py`。
+6. audit
    写入后使用 `check_consistency.py` 和 `check_stale.py` 做最小验证，避免错误状态继续传播。
 
 ## 6. 本地命令
@@ -215,6 +234,11 @@ python3 skills/context-hub/scripts/refresh_context.py /tmp/context-hub-demo --sy
 python3 skills/context-hub/scripts/bootstrap_credentials_check.py --check-ones
 python3 skills/context-hub/scripts/sync_topology.py --hub /tmp/context-hub-demo
 python3 skills/context-hub/scripts/sync_capability_status.py --hub /tmp/context-hub-demo --ones-team TEAM-UUID
+python3 skills/context-hub/scripts/workflows/pm_workflow.py --hub /tmp/context-hub-demo --capability voting --action create --domain meeting --content-file /tmp/spec.md --output-format json
+python3 skills/context-hub/scripts/workflows/design_workflow.py --hub /tmp/context-hub-demo --capability voting --action align --figma-url https://www.figma.com/design/FILE123/Voting --content-file /tmp/design.md --output-format json
+python3 skills/context-hub/scripts/workflows/engineering_workflow.py --hub /tmp/context-hub-demo --capability voting --action revise --repo-url git@itgitlab.xylink.com:group/voting-service.git --gitlab-branch main --content-file /tmp/architecture.md --output-format json
+python3 skills/context-hub/scripts/workflows/qa_workflow.py --hub /tmp/context-hub-demo --capability voting --action extend --content-file /tmp/testing.md --output-format json
+python3 skills/context-hub/scripts/workflows/maintenance_workflow.py --hub /tmp/context-hub-demo --capability voting --output-format json
 python3 skills/context-hub/scripts/check_consistency.py --hub /tmp/context-hub-demo
 python3 skills/context-hub/scripts/check_stale.py --hub /tmp/context-hub-demo
 ```
@@ -223,7 +247,7 @@ python3 skills/context-hub/scripts/check_stale.py --hub /tmp/context-hub-demo
 
 以下内容不属于当前已交付能力：
 
-- Figma / design 侧结构化同步
-- 完整的角色化 workflow executor
+- 深度 Figma / design 侧结构化同步
+- 跨全生命周期的多角色状态机和自动流转
 - 默认无人值守完成所有 git add/commit/push
 - 更细粒度的增量 webhook 编排和冲突自动处理

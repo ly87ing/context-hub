@@ -13,14 +13,16 @@
 - 聚合 team exports 到共享 `topology/*`
 - 基于 GitLab repo 补全工程服务的自动字段
 - 基于 ONES task 刷新 capability 状态摘要
+- PM / Design / Engineering / QA / maintenance role workflow v1
+- Figma URL 的轻量解析和 reachability probe
 - 刷新 `.context/llms.txt`
 - 做凭据 preflight、一致性检查和 stale 审计
 - 通过 `refresh_context.py` 编排同步，并支持可选 `auto-commit` / `auto-push`
 
 当前还没有实现：
 
-- Figma / design 侧结构化同步
-- 面向 PM / 设计 / 研发 / QA 的角色化 workflow executor
+- 深度 Figma / design 结构化同步
+- 跨全生命周期的多角色状态机和自动流转
 - 默认无人值守完成所有 git 提交 / 推送策略
 
 ## 联邦维护模型
@@ -36,12 +38,13 @@
 
 ## 工作关系
 
-当前实现的四个关键层次如下：
+当前实现的五个关键层次如下：
 
-1. 自然语言编排：`skills/context-hub/SKILL.md` 判断读取顺序、缺口补问和脚本调用。
-2. shared context：`IDENTITY.md`、`topology/*`、`capabilities/*`、`decisions/*`、`.context/llms.txt` 是所有角色默认读取的共享层。
-3. team exports：`teams/<team>/exports/*.yaml` 是各团队输出共享摘要的入口；`refresh_context.py` 负责聚合回共享层。
-4. sync / audit：`bootstrap_credentials_check.py` 做凭据预检，`sync_topology.py` / `sync_capability_status.py` 做 GitLab / ONES 摘要同步，`check_consistency.py` 和 `check_stale.py` 做契约与新鲜度审计。
+1. 自然语言编排：`skills/context-hub/SKILL.md` 判断 role / action / capability、补最少问题、调度脚本。
+2. role workflow：`scripts/workflows/*.py` 负责 `spec.md` / `design.md` / `architecture.md` / `testing.md` 的确定性写入和 live/fallback contract。
+3. shared context：`IDENTITY.md`、`topology/*`、`capabilities/*`、`decisions/*`、`.context/llms.txt` 是所有角色默认读取的共享层。
+4. team exports：`teams/<team>/exports/*.yaml` 是各团队输出共享摘要的入口；`refresh_context.py` 负责聚合回共享层。
+5. sync / audit：`bootstrap_credentials_check.py` 做凭据预检，`sync_topology.py` / `sync_capability_status.py` 做 GitLab / ONES 摘要同步，`check_consistency.py` 和 `check_stale.py` 做契约与新鲜度审计。
 
 ## 本地命令
 
@@ -65,15 +68,21 @@ python3 skills/context-hub/scripts/refresh_context.py /tmp/meeting-control-hub -
 python3 skills/context-hub/scripts/bootstrap_credentials_check.py --check-ones
 python3 skills/context-hub/scripts/sync_topology.py --hub /tmp/meeting-control-hub
 python3 skills/context-hub/scripts/sync_capability_status.py --hub /tmp/meeting-control-hub --ones-team TEAM-UUID
+python3 skills/context-hub/scripts/workflows/pm_workflow.py --hub /tmp/meeting-control-hub --capability voting --action create --domain meeting --content-file /tmp/spec.md --output-format json
+python3 skills/context-hub/scripts/workflows/design_workflow.py --hub /tmp/meeting-control-hub --capability voting --action align --figma-url https://www.figma.com/design/FILE123/Voting --content-file /tmp/design.md --output-format json
+python3 skills/context-hub/scripts/workflows/engineering_workflow.py --hub /tmp/meeting-control-hub --capability voting --action revise --repo-url git@itgitlab.xylink.com:group/voting-service.git --gitlab-branch main --content-file /tmp/architecture.md --output-format json
+python3 skills/context-hub/scripts/workflows/qa_workflow.py --hub /tmp/meeting-control-hub --capability voting --action extend --content-file /tmp/testing.md --output-format json
+python3 skills/context-hub/scripts/workflows/maintenance_workflow.py --hub /tmp/meeting-control-hub --capability voting --output-format json
 python3 skills/context-hub/scripts/check_consistency.py --hub /tmp/meeting-control-hub
 python3 skills/context-hub/scripts/check_stale.py --hub /tmp/meeting-control-hub
 ```
 
 说明：
 
-- `init_context_hub.py` 在新 hub 中生成共享目录、模板、`scripts/runtime/`、`scripts/integrations/` 以及后续维护脚本
+- `init_context_hub.py` 在新 hub 中生成共享目录、模板、`scripts/runtime/`、`scripts/integrations/`、`scripts/workflows/` 以及后续维护脚本
 - `create_capability.py` 维护 capability 文档骨架、`domains.yaml`、`ownership.yaml` 和 `ones_tasks`
 - `refresh_context.py` 负责编排 team export 聚合、可选 GitLab / ONES 同步、最小审计，以及可选 `auto-commit` / `auto-push`
+- `scripts/workflows/*.py` 是 role workflow v1 的稳定执行面；mutating action 一律通过 `--content-file` 写入目标文档
 - webhook 增量模式要求同时传入完整 `repo URL`、`branch` 与 `commit SHA`，并按每个 service 自己的 `default_branch` 决定是否刷新
 - `repo/branch/commit` 校验失败或 GitLab changed-files 读取失败会直接报错退出；repo 未命中、branch 不匹配、`default_branch` 缺失、空 changed files、docs-only commit 只返回信息性 skip
 - 第一版 changed-files gate 只把 `pyproject.toml`、`requirements.txt`、`package.json`、`pom.xml`、`build.gradle`、`build.gradle.kts`、`go.mod`、`*.proto`、`openapi.*`、`swagger.*` 视为 topology-relevant 信号
@@ -104,6 +113,8 @@ my-project-hub/
 │   ├── engineering/exports/
 │   └── qa/exports/
 ├── .context/llms.txt
+├── templates/
+│   └── role-intake/
 └── scripts/
     ├── create_capability.py
     ├── refresh_context.py
@@ -113,16 +124,17 @@ my-project-hub/
     ├── check_consistency.py
     ├── check_stale.py
     ├── runtime/
-    └── integrations/
+    ├── integrations/
+    └── workflows/
 ```
 
 ## 后续阶段
 
 仍待实现：
 
-- Figma / design 侧 adapter
+- 深度 Figma / design 侧同步
 - 更完整的 GitLab / ONES Webhook 和定时同步策略
-- 面向 PM / 设计 / 研发 / QA 的角色化 workflow executor
+- 跨全生命周期的多角色状态机和自动流转
 - 更细粒度的自动提交、审计和冲突处理策略
 
 详见 [docs/context-hub-specification.md](docs/context-hub-specification.md)

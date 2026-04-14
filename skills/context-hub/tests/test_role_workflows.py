@@ -581,3 +581,130 @@ class EngineeringWorkflowTest(ContextHubTestCase):
 
         architecture_path = self.hub_dir / "capabilities" / "voting" / "architecture.md"
         self.assertEqual(architecture_path.read_text(encoding="utf-8"), draft_text)
+
+
+class QAWorkflowTest(ContextHubTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        init_result = run_script(
+            "init_context_hub.py",
+            "--output",
+            str(self.hub_dir),
+            "--name",
+            "meeting-control",
+            "--id",
+            "meeting-control",
+        )
+        self.assertEqual(init_result.returncode, 0, msg=init_result.stderr)
+
+    def test_run_qa_workflow_align_returns_live_ok_when_ones_lookup_succeeds(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "meeting",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        draft_path = self.workdir / "qa-align-draft.md"
+        draft_text = "# voting testing\n\n- smoke checklist\n"
+        draft_path.write_text(draft_text, encoding="utf-8")
+
+        from workflows.qa_workflow import run_qa_workflow
+
+        with patch(
+            "workflows.qa_workflow.ones_adapter.get_task_info",
+            return_value={"uuid": "TASK-1", "name": "投票测试"},
+        ):
+            result = run_qa_workflow(
+                hub_root=self.hub_dir,
+                capability="voting",
+                action="align",
+                content_file=draft_path,
+                task_ref="TASK-1",
+            )
+
+        self.assertEqual(result["role"], "qa")
+        self.assertEqual(result["live_status"], "live_ok")
+        self.assertIn("ones://task/TASK-1", result["used_sources"])
+
+        testing_path = self.hub_dir / "capabilities" / "voting" / "testing.md"
+        self.assertEqual(testing_path.read_text(encoding="utf-8"), draft_text)
+
+    def test_run_qa_workflow_align_falls_back_to_testing_sources_when_ones_lookup_fails(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "meeting",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        draft_path = self.workdir / "qa-fallback-draft.md"
+        draft_text = "# fallback testing\n"
+        draft_path.write_text(draft_text, encoding="utf-8")
+
+        from workflows.qa_workflow import run_qa_workflow
+
+        with patch(
+            "workflows.qa_workflow.ones_adapter.get_task_info",
+            side_effect=MissingCredentialsError(["ONES_TOKEN"]),
+        ):
+            result = run_qa_workflow(
+                hub_root=self.hub_dir,
+                capability="voting",
+                action="align",
+                content_file=draft_path,
+                task_ref="TASK-2",
+            )
+
+        self.assertEqual(result["live_status"], "fallback_to_hub")
+        self.assertIn("未实时校验", result["warnings"][0])
+        self.assertIn("topology/testing-sources.yaml", result["used_sources"])
+
+        testing_path = self.hub_dir / "capabilities" / "voting" / "testing.md"
+        self.assertEqual(testing_path.read_text(encoding="utf-8"), draft_text)
+
+
+class MaintenanceWorkflowTest(ContextHubTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        init_result = run_script(
+            "init_context_hub.py",
+            "--output",
+            str(self.hub_dir),
+            "--name",
+            "meeting-control",
+            "--id",
+            "meeting-control",
+        )
+        self.assertEqual(init_result.returncode, 0, msg=init_result.stderr)
+
+    def test_run_maintenance_workflow_reports_missing_role_docs(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "meeting",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        (self.hub_dir / "capabilities" / "voting" / "design.md").unlink()
+
+        from workflows.maintenance_workflow import run_maintenance_workflow
+
+        result = run_maintenance_workflow(self.hub_dir, capability="voting")
+
+        self.assertEqual(result["role"], "maintenance")
+        self.assertEqual(result["action"], "audit")
+        self.assertIn("design.md", result["warnings"][0])
+        self.assertEqual(result["updated_paths"], [])
