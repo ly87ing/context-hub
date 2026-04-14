@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+import sys
 
 from yaml_compat import YAMLError, safe_load
 
@@ -153,3 +155,70 @@ def update_capability_record(
 
 def capability_target_document_path(capability_dir: str | Path, role: str) -> Path:
     return Path(capability_dir) / target_document_name(role)
+
+
+def bootstrap_pm_capability(
+    hub_root: str | Path,
+    capability_name: str,
+    domain: str,
+    *,
+    title: str | None = None,
+    status: str = "planned",
+    maintained_by: str = DEFAULT_MAINTAINED_BY,
+    ones_tasks: list[str] | None = None,
+) -> list[Path]:
+    from _common import load_yaml_file, save_yaml_file
+    from create_capability import ensure_domain, load_template_map, render_capability_files
+
+    root = Path(hub_root).resolve()
+    capability_dir = root / "capabilities" / capability_name
+    if capability_dir.exists():
+        return []
+
+    template_root = root / "capabilities" / "_templates"
+    template_map = load_template_map(template_root)
+    capability_title = (title or capability_name).strip() or capability_name
+    task_refs = normalize_task_refs(ones_tasks)
+
+    render_capability_files(capability_dir, template_map, capability_title, task_refs)
+
+    domains_path = root / "topology" / "domains.yaml"
+    domains_payload = load_yaml_file(domains_path, {"domains": {}})
+    domain_payload = ensure_domain(domains_payload, domain)
+    ensure_capability_record(
+        domain_payload,
+        capability_name,
+        capability_title,
+        status,
+        ones_tasks=task_refs,
+    )
+    save_yaml_file(domains_path, domains_payload)
+
+    ownership_path = root / "topology" / "ownership.yaml"
+    ownership_payload = load_ownership_payload(
+        ownership_path,
+        project_id=root.name,
+        project_name=root.name,
+    )
+    ensure_capability_ownership(
+        ownership_payload,
+        capability_name,
+        domain,
+        maintained_by=maintained_by,
+    )
+    save_yaml_file(ownership_path, ownership_payload)
+
+    updated_paths = [capability_dir / filename for filename in ("spec.md", "design.md", "architecture.md", "testing.md")]
+    updated_paths.extend([domains_path, ownership_path])
+
+    update_script = root / "scripts" / "update_llms_txt.py"
+    if update_script.exists():
+        subprocess.run(
+            [sys.executable, str(update_script), str(root)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        updated_paths.append(root / ".context" / "llms.txt")
+
+    return updated_paths

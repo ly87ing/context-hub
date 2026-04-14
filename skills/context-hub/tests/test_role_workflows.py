@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 THIS_DIR = Path(__file__).resolve().parent
 SCRIPTS_DIR = THIS_DIR.parent / "scripts"
@@ -13,8 +14,9 @@ for path in (THIS_DIR, SCRIPTS_DIR):
 
 from runtime.hub_paths import role_intake_template_path
 from runtime.capability_ops import capability_target_document_path
-from test_support import ContextHubTestCase
+from test_support import ContextHubTestCase, run_script
 from workflows.common import build_workflow_result, normalize_role, prepare_mutation_request, target_document_name
+from yaml_compat import safe_dump
 
 
 class RoleWorkflowContractTest(ContextHubTestCase):
@@ -114,3 +116,137 @@ class RoleWorkflowContractTest(ContextHubTestCase):
             capability_target_document_path(capability_dir, "设计"),
             capability_dir / "design.md",
         )
+
+
+class PMWorkflowTest(ContextHubTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        init_result = run_script(
+            "init_context_hub.py",
+            "--output",
+            str(self.hub_dir),
+            "--name",
+            "meeting-control",
+            "--id",
+            "meeting-control",
+        )
+        self.assertEqual(init_result.returncode, 0, msg=init_result.stderr)
+
+    def test_pm_create_bootstraps_missing_capability_and_writes_spec_from_draft(self) -> None:
+        draft_path = self.workdir / "pm-draft.md"
+        draft_text = "# Voting draft\n\n- collect requirements\n"
+        draft_path.write_text(draft_text, encoding="utf-8")
+
+        result = run_script(
+            "workflows/pm_workflow.py",
+            "--hub",
+            str(self.hub_dir),
+            "--capability",
+            "voting",
+            "--action",
+            "create",
+            "--domain",
+            "meeting",
+            "--content-file",
+            str(draft_path),
+            "--output-format",
+            "json",
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["role"], "pm")
+        self.assertEqual(payload["live_status"], "fallback_to_hub")
+
+        spec_path = self.hub_dir / "capabilities" / "voting" / "spec.md"
+        self.assertTrue(spec_path.exists())
+        self.assertEqual(spec_path.read_text(encoding="utf-8"), draft_text)
+
+    def test_run_pm_workflow_align_returns_live_ok_when_ones_lookup_succeeds(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "meeting",
+            "--ones-task",
+            "TASK-42",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        draft_path = self.workdir / "align-draft.md"
+        draft_path.write_text("# aligned spec\n", encoding="utf-8")
+
+        from workflows.pm_workflow import run_pm_workflow
+
+        with patch(
+            "workflows.pm_workflow.ones_adapter.get_task_info",
+            return_value={"uuid": "TASK-42", "number": 42, "name": "Voting"},
+        ):
+            result = run_pm_workflow(
+                hub_root=self.hub_dir,
+                capability="voting",
+                action="align",
+                domain="meeting",
+                content_file=draft_path,
+                task_ref="TASK-42",
+            )
+
+        self.assertEqual(result["role"], "pm")
+        self.assertEqual(result["live_status"], "live_ok")
+
+    def test_run_pm_workflow_align_falls_back_to_hub_when_ones_lookup_fails(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "meeting",
+            "--ones-task",
+            "TASK-99",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        summary_path = self.hub_dir / "capabilities" / "voting" / "source-summary.yaml"
+        summary_path.write_text(
+            safe_dump(
+                {
+                    "capability": "voting",
+                    "domain": "meeting",
+                    "source_system": "ones",
+                    "source_ref": "TASK-99",
+                    "last_synced_at": "2026-04-13T12:00:00Z",
+                    "status": "planned",
+                    "items": [{"uuid": "TASK-99", "name": "Voting"}],
+                    "acceptance_summary": "Voting(planned)",
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        draft_path = self.workdir / "fallback-align-draft.md"
+        draft_path.write_text("# fallback spec\n", encoding="utf-8")
+
+        from workflows.pm_workflow import run_pm_workflow
+
+        with patch(
+            "workflows.pm_workflow.ones_adapter.get_task_info",
+            side_effect=ValueError("missing credentials"),
+        ):
+            result = run_pm_workflow(
+                hub_root=self.hub_dir,
+                capability="voting",
+                action="align",
+                domain="meeting",
+                content_file=draft_path,
+                task_ref="TASK-99",
+            )
+
+        self.assertEqual(result["role"], "pm")
+        self.assertEqual(result["live_status"], "fallback_to_hub")
+        self.assertIn("未实时校验", result["warnings"][0])
