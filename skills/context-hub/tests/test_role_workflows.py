@@ -492,3 +492,92 @@ class DesignWorkflowTest(ContextHubTestCase):
             )
 
         self.assertFalse((self.hub_dir / "capabilities" / "missing-voting" / "design.md").exists())
+
+
+class EngineeringWorkflowTest(ContextHubTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        init_result = run_script(
+            "init_context_hub.py",
+            "--output",
+            str(self.hub_dir),
+            "--name",
+            "meeting-control",
+            "--id",
+            "meeting-control",
+        )
+        self.assertEqual(init_result.returncode, 0, msg=init_result.stderr)
+
+    def test_run_engineering_workflow_align_returns_live_ok_when_gitlab_lookup_succeeds(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "meeting",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        draft_path = self.workdir / "engineering-align-draft.md"
+        draft_text = "# voting architecture\n\n- service boundary\n"
+        draft_path.write_text(draft_text, encoding="utf-8")
+
+        from workflows.engineering_workflow import run_engineering_workflow
+
+        with patch(
+            "workflows.engineering_workflow.gitlab_adapter.lookup_project",
+            return_value={"id": 1, "name": "voting-service"},
+        ):
+            result = run_engineering_workflow(
+                hub_root=self.hub_dir,
+                capability="voting",
+                action="align",
+                content_file=draft_path,
+                repo_url="git@itgitlab.xylink.com:group/voting-service.git",
+                gitlab_branch="main",
+            )
+
+        self.assertEqual(result["live_status"], "live_ok")
+        self.assertEqual(result["target_file"], "capabilities/voting/architecture.md")
+
+        architecture_path = self.hub_dir / "capabilities" / "voting" / "architecture.md"
+        self.assertEqual(architecture_path.read_text(encoding="utf-8"), draft_text)
+
+    def test_run_engineering_workflow_align_falls_back_to_hub_when_gitlab_lookup_fails(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "meeting",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        draft_path = self.workdir / "engineering-fallback-draft.md"
+        draft_text = "# fallback architecture\n"
+        draft_path.write_text(draft_text, encoding="utf-8")
+
+        from workflows.engineering_workflow import run_engineering_workflow
+
+        with patch(
+            "workflows.engineering_workflow.gitlab_adapter.lookup_project",
+            side_effect=ValueError("missing token"),
+        ):
+            result = run_engineering_workflow(
+                hub_root=self.hub_dir,
+                capability="voting",
+                action="align",
+                content_file=draft_path,
+                repo_url="git@itgitlab.xylink.com:group/voting-service.git",
+                gitlab_branch="main",
+            )
+
+        self.assertEqual(result["live_status"], "fallback_to_hub")
+        self.assertIn("未实时校验", result["warnings"][0])
+
+        architecture_path = self.hub_dir / "capabilities" / "voting" / "architecture.md"
+        self.assertEqual(architecture_path.read_text(encoding="utf-8"), draft_text)
