@@ -1,8 +1,10 @@
 from .credentials import MissingCredentialsError, discover_values, missing_names, require_values
+from . import figma_adapter
 from .gitlab_adapter import GITLAB_INSTANCES, preflight_gitlab, resolve_gitlab_instance
 from .ones_adapter import ONES_REQUIRED_VARS, preflight_ones
 
 __all__ = [
+    "figma_adapter",
     "GITLAB_INSTANCES",
     "MissingCredentialsError",
     "ONES_REQUIRED_VARS",
