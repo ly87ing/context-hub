@@ -6,6 +6,11 @@
 
 `context-hub` 的目标不是替代 GitLab、ONES 或 Figma，而是把各团队愿意共享且有权限维护的上下文整理成一个可被 AI 和团队成员统一消费的 Git 仓库。
 
+如果你是第一次接触这个仓库，建议先看：
+
+- [团队指南：Context Hub 研发周期工作流指南](docs/guides/context-hub-lifecycle-guide.md)
+- [Guides 入口](docs/guides/README.md)
+
 当前仓库已经进入可本地运行的 Phase 2 integration baseline，已实现：
 
 - 初始化联邦式 hub 骨架
@@ -101,20 +106,31 @@ python3 skills/context-hub/scripts/check_stale.py --hub /tmp/meeting-control-hub
 
 ## 生成的 hub 结构
 
-当前初始化后的目录结构大致如下：
+完整说明见 [团队指南：Context Hub 研发周期工作流指南](docs/guides/context-hub-lifecycle-guide.md)。当前初始化后的目录结构大致如下：
 
 ```text
 my-project-hub/
 ├── IDENTITY.md
 ├── topology/
-│   ├── system.yaml
 │   ├── domains.yaml
+│   ├── ownership.yaml
+│   ├── system.yaml
 │   ├── testing-sources.yaml
 │   ├── design-sources.yaml
 │   ├── releases.yaml
-│   └── ownership.yaml
+│   └── ...
 ├── capabilities/
-│   └── _templates/
+│   ├── _templates/
+│   └── <capability>/
+│       ├── spec.md
+│       ├── design.md
+│       ├── architecture.md
+│       ├── testing.md
+│       ├── source-summary.yaml
+│       ├── downstream-checklist.yaml
+│       ├── iteration-index.yaml
+│       ├── lifecycle-state.yaml
+│       └── semantic-consistency.yaml
 ├── decisions/
 ├── teams/
 │   ├── product/exports/
@@ -129,8 +145,10 @@ my-project-hub/
     ├── refresh_context.py
     ├── sync_topology.py
     ├── sync_capability_status.py
+    ├── sync_design_context.py
     ├── bootstrap_credentials_check.py
     ├── check_consistency.py
+    ├── check_semantic_consistency.py
     ├── check_stale.py
     ├── runtime/
     ├── integrations/

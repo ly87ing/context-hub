@@ -2,6 +2,8 @@
 
 > 本文档描述当前仓库中已经落地的 `context-hub` 能力边界，而不是未来愿景的全集。
 
+如果你需要先理解团队应该怎么使用这套仓库、目录应该怎么组织、一个 capability 从需求到测试怎么维护，先看 [docs/guides/context-hub-lifecycle-guide.md](guides/context-hub-lifecycle-guide.md)。
+
 ## 1. 定位
 
 `context-hub` 是一个共享 Git 仓库，用来沉淀项目可共享的上下文。它不是源码镜像、不是知识库平台，也不是拥有全局权限的中心服务。
