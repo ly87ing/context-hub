@@ -57,20 +57,30 @@ def build_workflow_result(
     hub_root: str | Path,
     *,
     role: str,
+    action: str,
+    capability: str,
     target_file: str | Path,
+    live_status: str,
     updated_paths: list[str | Path],
+    warnings: list[str] | None = None,
 ) -> dict:
     root = Path(hub_root)
     return {
         "role": normalize_role(role),
+        "action": str(action).strip().lower(),
+        "capability": str(capability).strip(),
         "target_file": relative_path(Path(target_file), root),
+        "live_status": str(live_status).strip(),
+        "warnings": list(warnings or []),
         "updated_paths": [relative_path(Path(path), root) for path in updated_paths],
     }
 
 
 def prepare_mutation_request(
     *,
+    role: str,
     action: str,
+    capability: str,
     content_file: str | Path | None,
     target_file: str | Path,
     hub_root: str | Path,
@@ -79,7 +89,9 @@ def prepare_mutation_request(
     resolved_content_file = require_mutation_content_file(normalized_action, content_file)
     root = Path(hub_root)
     return {
+        "role": normalize_role(role),
         "action": normalized_action,
+        "capability": str(capability).strip(),
         "content_file": None if resolved_content_file is None else _hub_path(root, resolved_content_file),
         "target_file": _hub_path(root, target_file),
         "hub_root": root,

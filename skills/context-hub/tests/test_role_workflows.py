@@ -38,12 +38,19 @@ class RoleWorkflowContractTest(ContextHubTestCase):
         result = build_workflow_result(
             self.hub_dir,
             role="PM",
+            action="create",
+            capability="meeting-control",
             target_file=target_file,
+            live_status="live_ok",
             updated_paths=updated_paths,
         )
 
         self.assertEqual(result["role"], "pm")
+        self.assertEqual(result["action"], "create")
+        self.assertEqual(result["capability"], "meeting-control")
         self.assertEqual(result["target_file"], "capabilities/meeting-control/spec.md")
+        self.assertEqual(result["live_status"], "live_ok")
+        self.assertEqual(result["warnings"], [])
         self.assertEqual(
             result["updated_paths"],
             [
@@ -61,7 +68,9 @@ class RoleWorkflowContractTest(ContextHubTestCase):
 
         with self.assertRaisesRegex(ValueError, "content-file"):
             prepare_mutation_request(
+                role="pm",
                 action="extend",
+                capability="meeting-control",
                 content_file=None,
                 target_file=self.hub_dir / "capabilities" / "meeting-control" / "spec.md",
                 hub_root=self.hub_dir,
