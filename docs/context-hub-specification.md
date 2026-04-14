@@ -129,6 +129,39 @@ role workflow v1 由 `SKILL.md` 和 `scripts/workflows/*.py` 共同构成：
 - `scripts/workflows/qa_workflow.py` 写 `testing.md`；优先读取 ONES 测试任务，失败时回退到 `topology/testing-sources.yaml`
 - `scripts/workflows/maintenance_workflow.py` 只做只读审计，报告缺失文档和建议下一角色
 
+#### 4.3.1 迭代变更维护规则
+
+同一个 capability 在不同迭代中的需求演进，默认持续维护在同一目录下，而不是按迭代复制出多套 `spec/design/architecture/testing`：
+
+- 长周期锚点始终是 `capabilities/<name>/`
+- 迭代是该 capability 的一次变更来源，不是新的顶层 contract 单元
+- 只有当后续工作已经不再属于同一个能力边界时，才应创建新的 capability
+
+当迭代发生需求变更时，按受影响面联动维护：
+
+- 业务目标、范围、规则、验收变化：更新 `spec.md`
+- 交互、状态、页面流程、视觉约束变化：更新 `design.md`
+- 服务边界、接口、依赖、实现约束变化：更新 `architecture.md`
+- 测试范围、回归面、环境依赖、验收口径变化：更新 `testing.md`
+
+维护原则如下：
+
+- 不要求每次迭代机械地重写四份文档；只同步受影响的角色文档
+- `spec.md` 是需求变更的主入口；任何迭代范围变化至少应在 `spec.md` 留下痕迹
+- `spec.md` 的“变更记录”用于记录迭代级变化
+- 影响技术决策边界的变更，除更新 `architecture.md` 外，还应补充 `decisions/*.md`
+- 影响真实任务来源时，应维护 `topology/domains.yaml` 中 capability 的 `ones_tasks`
+- `sync_capability_status.py` 会根据 `ones_tasks` 汇总生成 `source-summary.yaml`，并回写 `status`、`last_synced_at`、`source_ref`
+
+推荐执行顺序：
+
+1. PM 用 `revise` 或 `align` 更新 `spec.md`
+2. Design / Engineering / QA 仅对受影响文档执行对应的 `extend` / `revise` / `align`
+3. 若 `ones_tasks` 发生变化，运行 `sync_capability_status.py` 或 `refresh_context.py --sync-ones`
+4. 写后运行 `check_consistency.py`；需要 freshness 检查时再运行 `check_stale.py`
+
+这条规则的目标是让同一个 capability 在多次迭代中保持单一事实源，同时保留足够的变更轨迹和跨角色一致性。
+
 ### 4.4 Shared Context 聚合与编排
 
 `refresh_context.py` 当前负责编排本地聚合与可选同步：

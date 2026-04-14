@@ -46,6 +46,8 @@
 4. team exports：`teams/<team>/exports/*.yaml` 是各团队输出共享摘要的入口；`refresh_context.py` 负责聚合回共享层。
 5. sync / audit：`bootstrap_credentials_check.py` 做凭据预检，`sync_topology.py` / `sync_capability_status.py` 做 GitLab / ONES 摘要同步，`check_consistency.py` 和 `check_stale.py` 做契约与新鲜度审计。
 
+同一个 capability 在不同迭代中的变化，默认持续维护在同一组主文档里，而不是按迭代复制新目录；需求变化至少更新 `spec.md`，其余 `design.md` / `architecture.md` / `testing.md` 按受影响面联动同步。正式规则见 [docs/context-hub-specification.md](docs/context-hub-specification.md) 的“4.3.1 迭代变更维护规则”。
+
 ## 本地命令
 
 在本仓库中可直接运行的命令如下：
