@@ -36,6 +36,10 @@ class RoleWorkflowContractTest(ContextHubTestCase):
             target_file,
             self.hub_dir / ".context" / "llms.txt",
         ]
+        used_sources = [
+            self.hub_dir / "topology" / "domains.yaml",
+            "capabilities/meeting-control/spec-source.md",
+        ]
 
         result = build_workflow_result(
             self.hub_dir,
@@ -43,6 +47,7 @@ class RoleWorkflowContractTest(ContextHubTestCase):
             action="create",
             capability="meeting-control",
             target_file=target_file,
+            used_sources=used_sources,
             live_status="live_ok",
             updated_paths=updated_paths,
         )
@@ -51,6 +56,13 @@ class RoleWorkflowContractTest(ContextHubTestCase):
         self.assertEqual(result["action"], "create")
         self.assertEqual(result["capability"], "meeting-control")
         self.assertEqual(result["target_file"], "capabilities/meeting-control/spec.md")
+        self.assertEqual(
+            result["used_sources"],
+            [
+                "topology/domains.yaml",
+                "capabilities/meeting-control/spec-source.md",
+            ],
+        )
         self.assertEqual(result["live_status"], "live_ok")
         self.assertEqual(result["warnings"], [])
         self.assertEqual(
