@@ -17,7 +17,8 @@ for path in (THIS_DIR, SCRIPTS_DIR):
         sys.path.insert(0, path_str)
 
 from _common import normalize_slug
-from runtime.validation import REQUIRED_CAPABILITY_FILES, relative_path, resolve_hub_root
+from runtime.downstream_checklist import list_pending_downstream_roles, load_downstream_checklist
+from runtime.validation import REQUIRED_CAPABILITY_FILES, relative_path, resolve_hub_root, target_document_name
 
 
 NEXT_ROLE_BY_DOCUMENT = {
@@ -47,6 +48,8 @@ def run_maintenance_workflow(hub_root: str | Path, *, capability: str | None = N
     root = Path(hub_root).resolve()
     warnings: list[str] = []
     next_role: str | None = None
+    pending_roles: list[str] = []
+    seen_pending_roles: set[str] = set()
 
     capability_dirs = _iter_capability_dirs(root, capability)
     if capability and not capability_dirs[0].exists():
@@ -56,13 +59,28 @@ def run_maintenance_workflow(hub_root: str | Path, *, capability: str | None = N
     for capability_dir in capability_dirs:
         if not capability_dir.exists():
             continue
+        has_missing_documents = False
         for filename in REQUIRED_CAPABILITY_FILES:
             document_path = capability_dir / filename
             if document_path.exists():
                 continue
+            has_missing_documents = True
             warnings.append(f"{relative_path(document_path, root)} 不存在")
             if next_role is None:
                 next_role = NEXT_ROLE_BY_DOCUMENT.get(filename)
+        if has_missing_documents:
+            continue
+
+        checklist_payload = load_downstream_checklist(capability_dir)
+        for role in list_pending_downstream_roles(capability_dir, checklist_payload):
+            warnings.append(
+                f"{relative_path(capability_dir / target_document_name(role), root)} 落后于最新 spec 变更，建议 {role} 执行 align"
+            )
+            if role not in seen_pending_roles:
+                seen_pending_roles.add(role)
+                pending_roles.append(role)
+                if next_role is None:
+                    next_role = role
 
     result: dict[str, object] = {
         "role": "maintenance",
@@ -71,6 +89,8 @@ def run_maintenance_workflow(hub_root: str | Path, *, capability: str | None = N
         "warnings": warnings,
         "updated_paths": [],
     }
+    if pending_roles:
+        result["pending_roles"] = pending_roles
     if next_role is not None:
         result["next_role"] = next_role
         result["next_action"] = "align"

@@ -18,6 +18,7 @@ from integrations import ones_adapter
 from integrations.credentials import MissingCredentialsError
 from _common import normalize_slug
 from runtime.capability_ops import bootstrap_pm_capability, capability_target_document_path
+from runtime.downstream_checklist import write_downstream_checklist
 from runtime.hub_io import safe_write_text
 from runtime.validation import load_yaml_mapping, resolve_hub_root
 from workflows.common import build_workflow_result, prepare_mutation_request
@@ -104,6 +105,13 @@ def run_pm_workflow(
 
     safe_write_text(request["target_file"], request["content_file"].read_text(encoding="utf-8"))
     updated_paths.append(request["target_file"])
+    updated_paths.append(
+        write_downstream_checklist(
+            capability_dir,
+            capability=capability_name,
+            action=request["action"],
+        )
+    )
 
     deduped_sources: list[str | Path] = []
     seen_sources: set[str] = set()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -14,6 +15,7 @@ for path in (THIS_DIR, SCRIPTS_DIR):
 
 from runtime.hub_paths import role_intake_template_path
 from runtime.capability_ops import capability_target_document_path
+from runtime.validation import parse_freshness
 from test_support import ContextHubTestCase, run_script
 from workflows.common import build_workflow_result, normalize_role, prepare_mutation_request, target_document_name
 from yaml_compat import safe_dump
@@ -353,6 +355,44 @@ class PMWorkflowTest(ContextHubTestCase):
 
         self.assertEqual(result["live_status"], "fallback_to_hub")
         self.assertIn("未实时校验", result["warnings"][0])
+
+    def test_run_pm_workflow_revise_generates_downstream_checklist(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "meeting",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        draft_path = self.workdir / "revise-draft.md"
+        draft_path.write_text("# revised voting spec\n\n- update acceptance\n", encoding="utf-8")
+
+        from workflows.pm_workflow import run_pm_workflow
+
+        result = run_pm_workflow(
+            hub_root=self.hub_dir,
+            capability="voting",
+            action="revise",
+            domain="meeting",
+            content_file=draft_path,
+        )
+
+        checklist_path = self.hub_dir / "capabilities" / "voting" / "downstream-checklist.yaml"
+        self.assertTrue(checklist_path.exists())
+        self.assertIn("capabilities/voting/downstream-checklist.yaml", result["updated_paths"])
+
+        payload = safe_load(checklist_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["capability"], "voting")
+        self.assertEqual(payload["source"]["role"], "pm")
+        self.assertEqual(payload["source"]["action"], "revise")
+        self.assertEqual(payload["source"]["target_file"], "spec.md")
+        self.assertEqual([item["role"] for item in payload["items"]], ["design", "engineering", "qa"])
+        self.assertEqual({item["status"] for item in payload["items"]}, {"pending"})
+        self.assertTrue(payload["generated_at"])
 
 
 class DesignWorkflowTest(ContextHubTestCase):
@@ -708,3 +748,75 @@ class MaintenanceWorkflowTest(ContextHubTestCase):
         self.assertEqual(result["action"], "audit")
         self.assertIn("design.md", result["warnings"][0])
         self.assertEqual(result["updated_paths"], [])
+
+    def test_run_maintenance_workflow_reports_pending_downstream_roles(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "meeting",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        draft_path = self.workdir / "pm-checklist-draft.md"
+        draft_path.write_text("# revised voting spec\n", encoding="utf-8")
+
+        from workflows.pm_workflow import run_pm_workflow
+        from workflows.maintenance_workflow import run_maintenance_workflow
+
+        run_pm_workflow(
+            hub_root=self.hub_dir,
+            capability="voting",
+            action="revise",
+            domain="meeting",
+            content_file=draft_path,
+        )
+
+        result = run_maintenance_workflow(self.hub_dir, capability="voting")
+
+        self.assertEqual(result["pending_roles"], ["design", "engineering", "qa"])
+        self.assertEqual(result["next_role"], "design")
+        self.assertEqual(result["next_action"], "align")
+        self.assertIn("design", result["warnings"][0])
+
+    def test_run_maintenance_workflow_skips_roles_updated_after_checklist(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "meeting",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        draft_path = self.workdir / "pm-refresh-draft.md"
+        draft_path.write_text("# revised voting spec\n", encoding="utf-8")
+
+        from workflows.pm_workflow import run_pm_workflow
+        from workflows.maintenance_workflow import run_maintenance_workflow
+
+        run_pm_workflow(
+            hub_root=self.hub_dir,
+            capability="voting",
+            action="revise",
+            domain="meeting",
+            content_file=draft_path,
+        )
+
+        checklist_path = self.hub_dir / "capabilities" / "voting" / "downstream-checklist.yaml"
+        checklist_payload = safe_load(checklist_path.read_text(encoding="utf-8"))
+        refreshed_at = parse_freshness(checklist_payload["generated_at"]).timestamp() + 60
+
+        for filename in ("design.md", "architecture.md", "testing.md"):
+            document_path = self.hub_dir / "capabilities" / "voting" / filename
+            os.utime(document_path, (refreshed_at, refreshed_at))
+
+        result = run_maintenance_workflow(self.hub_dir, capability="voting")
+
+        self.assertNotIn("pending_roles", result)
+        self.assertNotIn("next_role", result)

@@ -41,12 +41,12 @@
 当前实现的五个关键层次如下：
 
 1. 自然语言编排：`skills/context-hub/SKILL.md` 判断 role / action / capability、补最少问题、调度脚本。
-2. role workflow：`scripts/workflows/*.py` 负责 `spec.md` / `design.md` / `architecture.md` / `testing.md` 的确定性写入和 live/fallback contract。
+2. role workflow：`scripts/workflows/*.py` 负责 `spec.md` / `design.md` / `architecture.md` / `testing.md` 的确定性写入和 live/fallback contract；其中 PM 写 `spec.md` 后会同步生成 `downstream-checklist.yaml`，供 maintenance 审计 downstream 是否已跟进。
 3. shared context：`IDENTITY.md`、`topology/*`、`capabilities/*`、`decisions/*`、`.context/llms.txt` 是所有角色默认读取的共享层。
 4. team exports：`teams/<team>/exports/*.yaml` 是各团队输出共享摘要的入口；`refresh_context.py` 负责聚合回共享层。
 5. sync / audit：`bootstrap_credentials_check.py` 做凭据预检，`sync_topology.py` / `sync_capability_status.py` 做 GitLab / ONES 摘要同步，`check_consistency.py` 和 `check_stale.py` 做契约与新鲜度审计。
 
-同一个 capability 在不同迭代中的变化，默认持续维护在同一组主文档里，而不是按迭代复制新目录；需求变化至少更新 `spec.md`，其余 `design.md` / `architecture.md` / `testing.md` 按受影响面联动同步。正式规则见 [docs/context-hub-specification.md](docs/context-hub-specification.md) 的“4.3.1 迭代变更维护规则”。
+同一个 capability 在不同迭代中的变化，默认持续维护在同一组主文档里，而不是按迭代复制新目录；需求变化至少更新 `spec.md`，PM workflow 会据此刷新 `downstream-checklist.yaml`，其余 `design.md` / `architecture.md` / `testing.md` 再按受影响面联动同步。正式规则见 [docs/context-hub-specification.md](docs/context-hub-specification.md) 的“4.3.1 迭代变更维护规则”。
 
 ## 本地命令
 

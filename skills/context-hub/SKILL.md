@@ -94,11 +94,11 @@ description: |
 - 动作 contract：`create` / `extend` / `revise` / `align`
 - mutating workflow 一律通过 `--content-file` 接收草稿，并由对应脚本负责写入和最小校验
 - 外部系统读取结果统一映射为 `live_ok` / `fallback_to_hub` / `blocked`
-- `pm_workflow.py` 负责 `spec.md`；只有 PM `create` 允许 bootstrap 缺失 capability
+- `pm_workflow.py` 负责 `spec.md`；只有 PM `create` 允许 bootstrap 缺失 capability；每次写后都会刷新 `downstream-checklist.yaml`
 - `design_workflow.py` 负责 `design.md`，可选读取 Figma URL 做轻量 probe
 - `engineering_workflow.py` 负责 `architecture.md`，可选读取 GitLab repo 做轻量 lookup
 - `qa_workflow.py` 负责 `testing.md`，优先读取 ONES 测试任务，失败时回退到 `topology/testing-sources.yaml`
-- `maintenance_workflow.py` 只做只读审计，报告缺失文档和建议下一角色
+- `maintenance_workflow.py` 只做只读审计，报告缺失文档，并结合 `downstream-checklist.yaml` 提示还没跟进最新 spec 变更的 downstream 角色
 
 ## 权限降级规则
 
