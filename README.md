@@ -41,12 +41,12 @@
 当前实现的五个关键层次如下：
 
 1. 自然语言编排：`skills/context-hub/SKILL.md` 判断 role / action / capability、补最少问题、调度脚本。
-2. role workflow：`scripts/workflows/*.py` 负责 `spec.md` / `design.md` / `architecture.md` / `testing.md` 的确定性写入和 live/fallback contract；其中 PM 写 `spec.md` 后会同步生成 `downstream-checklist.yaml`，供 maintenance 审计 downstream 是否已跟进。
+2. role workflow：`scripts/workflows/*.py` 负责 `spec.md` / `design.md` / `architecture.md` / `testing.md` 的确定性写入和 live/fallback contract；其中 PM 写 `spec.md` 后会同步生成 `downstream-checklist.yaml` 和 `iteration-index.yaml`，供 maintenance 审计 downstream 是否已跟进，并沉淀当前 iteration/release 索引。
 3. shared context：`IDENTITY.md`、`topology/*`、`capabilities/*`、`decisions/*`、`.context/llms.txt` 是所有角色默认读取的共享层。
 4. team exports：`teams/<team>/exports/*.yaml` 是各团队输出共享摘要的入口；`refresh_context.py` 负责聚合回共享层。
 5. sync / audit：`bootstrap_credentials_check.py` 做凭据预检，`sync_topology.py` / `sync_capability_status.py` 做 GitLab / ONES 摘要同步，`check_consistency.py` 和 `check_stale.py` 做契约与新鲜度审计。
 
-同一个 capability 在不同迭代中的变化，默认持续维护在同一组主文档里，而不是按迭代复制新目录；需求变化至少更新 `spec.md`，PM workflow 会据此刷新 `downstream-checklist.yaml`，其余 `design.md` / `architecture.md` / `testing.md` 再按受影响面联动同步。正式规则见 [docs/context-hub-specification.md](docs/context-hub-specification.md) 的“4.3.1 迭代变更维护规则”。
+同一个 capability 在不同迭代中的变化，默认持续维护在同一组主文档里，而不是按迭代复制新目录；需求变化至少更新 `spec.md`，PM workflow 会据此刷新 `downstream-checklist.yaml` 与 `iteration-index.yaml`，其余 `design.md` / `architecture.md` / `testing.md` 再按受影响面联动同步。正式规则见 [docs/context-hub-specification.md](docs/context-hub-specification.md) 的“4.3.1 迭代变更维护规则”。
 
 ## 本地命令
 
@@ -70,7 +70,7 @@ python3 skills/context-hub/scripts/refresh_context.py /tmp/meeting-control-hub -
 python3 skills/context-hub/scripts/bootstrap_credentials_check.py --check-ones
 python3 skills/context-hub/scripts/sync_topology.py --hub /tmp/meeting-control-hub
 python3 skills/context-hub/scripts/sync_capability_status.py --hub /tmp/meeting-control-hub --ones-team TEAM-UUID
-python3 skills/context-hub/scripts/workflows/pm_workflow.py --hub /tmp/meeting-control-hub --capability voting --action create --domain meeting --content-file /tmp/spec.md --output-format json
+python3 skills/context-hub/scripts/workflows/pm_workflow.py --hub /tmp/meeting-control-hub --capability voting --action create --domain meeting --iteration "Sprint 12" --release "2026.04" --content-file /tmp/spec.md --output-format json
 python3 skills/context-hub/scripts/workflows/design_workflow.py --hub /tmp/meeting-control-hub --capability voting --action align --figma-url https://www.figma.com/design/FILE123/Voting --content-file /tmp/design.md --output-format json
 python3 skills/context-hub/scripts/workflows/engineering_workflow.py --hub /tmp/meeting-control-hub --capability voting --action revise --repo-url git@itgitlab.xylink.com:group/voting-service.git --gitlab-branch main --content-file /tmp/architecture.md --output-format json
 python3 skills/context-hub/scripts/workflows/qa_workflow.py --hub /tmp/meeting-control-hub --capability voting --action extend --content-file /tmp/testing.md --output-format json
@@ -84,7 +84,7 @@ python3 skills/context-hub/scripts/check_stale.py --hub /tmp/meeting-control-hub
 - `init_context_hub.py` 在新 hub 中生成共享目录、模板、`scripts/runtime/`、`scripts/integrations/`、`scripts/workflows/` 以及后续维护脚本
 - `create_capability.py` 维护 capability 文档骨架、`domains.yaml`、`ownership.yaml` 和 `ones_tasks`
 - `refresh_context.py` 负责编排 team export 聚合、可选 GitLab / ONES 同步、最小审计，以及可选 `auto-commit` / `auto-push`
-- `scripts/workflows/*.py` 是 role workflow v1 的稳定执行面；mutating action 一律通过 `--content-file` 写入目标文档
+- `scripts/workflows/*.py` 是 role workflow v1 的稳定执行面；mutating action 一律通过 `--content-file` 写入目标文档，PM workflow 额外支持可选的 `--iteration` / `--release`
 - webhook 增量模式要求同时传入完整 `repo URL`、`branch` 与 `commit SHA`，并按每个 service 自己的 `default_branch` 决定是否刷新
 - `repo/branch/commit` 校验失败或 GitLab changed-files 读取失败会直接报错退出；repo 未命中、branch 不匹配、`default_branch` 缺失、空 changed files、docs-only commit 只返回信息性 skip
 - 第一版 changed-files gate 只把 `pyproject.toml`、`requirements.txt`、`package.json`、`pom.xml`、`build.gradle`、`build.gradle.kts`、`go.mod`、`*.proto`、`openapi.*`、`swagger.*` 视为 topology-relevant 信号

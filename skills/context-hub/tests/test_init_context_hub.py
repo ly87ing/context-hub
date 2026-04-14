@@ -48,6 +48,7 @@ class InitContextHubTest(ContextHubTestCase):
         self.assertTrue((self.hub_dir / "teams" / "qa" / "exports").exists())
         self.assertTrue((self.hub_dir / "scripts" / "sync_capability_status.py").exists())
         self.assertTrue((self.hub_dir / "scripts" / "runtime" / "commit_ops.py").exists())
+        self.assertTrue((self.hub_dir / "scripts" / "runtime" / "iteration_index.py").exists())
 
     def test_init_copies_workflow_skeleton_assets(self) -> None:
         result = run_script(

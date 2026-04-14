@@ -394,6 +394,142 @@ class PMWorkflowTest(ContextHubTestCase):
         self.assertEqual({item["status"] for item in payload["items"]}, {"pending"})
         self.assertTrue(payload["generated_at"])
 
+    def test_run_pm_workflow_create_initializes_iteration_index_with_default_labels(self) -> None:
+        draft_path = self.workdir / "pm-create-draft.md"
+        draft_path.write_text("# voting spec\n", encoding="utf-8")
+
+        result = run_script(
+            "workflows/pm_workflow.py",
+            "--hub",
+            str(self.hub_dir),
+            "--capability",
+            "voting",
+            "--action",
+            "create",
+            "--domain",
+            "meeting",
+            "--content-file",
+            str(draft_path),
+            "--output-format",
+            "json",
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+        index_path = self.hub_dir / "capabilities" / "voting" / "iteration-index.yaml"
+        payload = safe_load(index_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["capability"], "voting")
+        self.assertEqual(payload["current"]["iteration"], "backlog")
+        self.assertEqual(payload["current"]["release"], "unassigned")
+        self.assertEqual(payload["current"]["source_role"], "pm")
+        self.assertEqual(payload["current"]["source_action"], "create")
+        self.assertEqual(len(payload["entries"]), 1)
+        self.assertEqual(payload["entries"][0]["status"], "current")
+        self.assertEqual(payload["entries"][0]["updates"], 1)
+
+    def test_run_pm_workflow_revise_reuses_current_iteration_release_and_tracks_updates(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "meeting",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        draft_one = self.workdir / "iteration-one.md"
+        draft_two = self.workdir / "iteration-two.md"
+        draft_one.write_text("# revise 1\n", encoding="utf-8")
+        draft_two.write_text("# revise 2\n", encoding="utf-8")
+
+        from workflows.pm_workflow import run_pm_workflow
+
+        with patch(
+            "runtime.iteration_index.utc_now_iso",
+            side_effect=["2026-04-14T10:00:00Z", "2026-04-15T11:00:00Z"],
+        ):
+            run_pm_workflow(
+                hub_root=self.hub_dir,
+                capability="voting",
+                action="revise",
+                domain="meeting",
+                content_file=draft_one,
+                iteration="Sprint 12",
+                release="2026.04",
+            )
+            result = run_pm_workflow(
+                hub_root=self.hub_dir,
+                capability="voting",
+                action="revise",
+                domain="meeting",
+                content_file=draft_two,
+            )
+
+        index_path = self.hub_dir / "capabilities" / "voting" / "iteration-index.yaml"
+        payload = safe_load(index_path.read_text(encoding="utf-8"))
+
+        self.assertIn("capabilities/voting/iteration-index.yaml", result["updated_paths"])
+        self.assertEqual(payload["current"]["iteration"], "Sprint 12")
+        self.assertEqual(payload["current"]["release"], "2026.04")
+        self.assertEqual(len(payload["entries"]), 1)
+        self.assertEqual(payload["entries"][0]["first_seen_at"], "2026-04-14T10:00:00Z")
+        self.assertEqual(payload["entries"][0]["last_updated_at"], "2026-04-15T11:00:00Z")
+        self.assertEqual(payload["entries"][0]["updates"], 2)
+        self.assertEqual(payload["entries"][0]["status"], "current")
+
+    def test_run_pm_workflow_revise_appends_new_iteration_entry_when_labels_change(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "meeting",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        draft_one = self.workdir / "release-one.md"
+        draft_two = self.workdir / "release-two.md"
+        draft_one.write_text("# revise 1\n", encoding="utf-8")
+        draft_two.write_text("# revise 2\n", encoding="utf-8")
+
+        from workflows.pm_workflow import run_pm_workflow
+
+        with patch(
+            "runtime.iteration_index.utc_now_iso",
+            side_effect=["2026-04-14T10:00:00Z", "2026-04-21T09:30:00Z"],
+        ):
+            run_pm_workflow(
+                hub_root=self.hub_dir,
+                capability="voting",
+                action="revise",
+                domain="meeting",
+                content_file=draft_one,
+                iteration="Sprint 12",
+                release="2026.04",
+            )
+            run_pm_workflow(
+                hub_root=self.hub_dir,
+                capability="voting",
+                action="revise",
+                domain="meeting",
+                content_file=draft_two,
+                iteration="Sprint 13",
+                release="2026.05",
+            )
+
+        index_path = self.hub_dir / "capabilities" / "voting" / "iteration-index.yaml"
+        payload = safe_load(index_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["current"]["iteration"], "Sprint 13")
+        self.assertEqual(payload["current"]["release"], "2026.05")
+        self.assertEqual(len(payload["entries"]), 2)
+        self.assertEqual(payload["entries"][0]["status"], "historical")
+        self.assertEqual(payload["entries"][1]["status"], "current")
+
 
 class DesignWorkflowTest(ContextHubTestCase):
     def setUp(self) -> None:

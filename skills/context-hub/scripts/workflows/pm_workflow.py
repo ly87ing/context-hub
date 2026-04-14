@@ -20,6 +20,7 @@ from _common import normalize_slug
 from runtime.capability_ops import bootstrap_pm_capability, capability_target_document_path
 from runtime.downstream_checklist import write_downstream_checklist
 from runtime.hub_io import safe_write_text
+from runtime.iteration_index import write_iteration_index
 from runtime.validation import load_yaml_mapping, resolve_hub_root
 from workflows.common import build_workflow_result, prepare_mutation_request
 
@@ -54,6 +55,8 @@ def run_pm_workflow(
     domain: str | None = None,
     content_file: str | Path | None = None,
     task_ref: str | None = None,
+    iteration: str | None = None,
+    release: str | None = None,
 ) -> dict:
     root = Path(hub_root).resolve()
     capability_name = normalize_slug(capability)
@@ -112,6 +115,16 @@ def run_pm_workflow(
             action=request["action"],
         )
     )
+    updated_paths.append(
+        write_iteration_index(
+            capability_dir,
+            capability=capability_name,
+            action=request["action"],
+            iteration=iteration,
+            release=release,
+            source_ref=resolved_task_ref,
+        )
+    )
 
     deduped_sources: list[str | Path] = []
     seen_sources: set[str] = set()
@@ -152,6 +165,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--domain", default="", help="业务域；create 时必填")
     parser.add_argument("--content-file", default="", help="输入草稿文件")
     parser.add_argument("--task-ref", default="", help="可选的 ONES task ref")
+    parser.add_argument("--iteration", default="", help="可选的迭代标签")
+    parser.add_argument("--release", default="", help="可选的发布标签")
     parser.add_argument("--output-format", default="text", choices=("text", "json"))
     return parser.parse_args()
 
@@ -167,6 +182,8 @@ def main() -> int:
             domain=args.domain or None,
             content_file=args.content_file or None,
             task_ref=args.task_ref or None,
+            iteration=args.iteration or None,
+            release=args.release or None,
         )
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

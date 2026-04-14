@@ -72,6 +72,18 @@ services:
         self.assertIn("scripts/workflows/pm_workflow.py", output)
         self.assertIn("不存在", output)
 
+    def test_consistency_fails_when_runtime_asset_is_missing(self) -> None:
+        runtime_path = self.hub_dir / "scripts" / "runtime" / "iteration_index.py"
+        self.assertTrue(runtime_path.exists())
+        runtime_path.unlink()
+
+        result = run_script("check_consistency.py", cwd=self.hub_dir)
+
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 2, msg=output)
+        self.assertIn("scripts/runtime/iteration_index.py", output)
+        self.assertIn("不存在", output)
+
     def test_consistency_returns_zero_for_clean_hub(self) -> None:
         result = run_script("check_consistency.py", cwd=self.hub_dir)
 

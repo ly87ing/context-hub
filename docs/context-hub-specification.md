@@ -123,11 +123,12 @@ role workflow v1 由 `SKILL.md` 和 `scripts/workflows/*.py` 共同构成：
 - mutating workflow 一律通过 `--content-file` 接收草稿，再由脚本负责写入目标文档
 - 外部系统读取结果统一映射为 `live_ok` / `fallback_to_hub` / `blocked`
 - `scripts/workflows/common.py` 提供 shared helper，包括 role normalization、target-file mapping、mutation request 和统一结果结构
-- `scripts/workflows/pm_workflow.py` 写 `spec.md`；只有 PM `create` 可以 bootstrap 缺失 capability；每次写后都会刷新 `downstream-checklist.yaml`
+- `scripts/workflows/pm_workflow.py` 写 `spec.md`；只有 PM `create` 可以 bootstrap 缺失 capability；每次写后都会刷新 `downstream-checklist.yaml` 和 `iteration-index.yaml`
 - `scripts/workflows/design_workflow.py` 写 `design.md`；可选读取 Figma URL 并做轻量 probe
 - `scripts/workflows/engineering_workflow.py` 写 `architecture.md`；可选读取 GitLab repo 并做轻量 lookup
 - `scripts/workflows/qa_workflow.py` 写 `testing.md`；优先读取 ONES 测试任务，失败时回退到 `topology/testing-sources.yaml`
 - `scripts/workflows/maintenance_workflow.py` 只做只读审计，报告缺失文档，并结合 `downstream-checklist.yaml` 提示哪些 downstream 角色还没跟进最新 spec 变更
+- PM workflow 可选接收 `iteration` / `release` 标签，并把它们收敛到 capability 下的 `iteration-index.yaml`
 
 #### 4.3.1 迭代变更维护规则
 
@@ -147,7 +148,8 @@ role workflow v1 由 `SKILL.md` 和 `scripts/workflows/*.py` 共同构成：
 维护原则如下：
 
 - 不要求每次迭代机械地重写四份文档；只同步受影响的角色文档
-- `spec.md` 是需求变更的主入口；任何迭代范围变化至少应在 `spec.md` 留下痕迹，且 PM workflow 写后会刷新 `downstream-checklist.yaml`
+- `spec.md` 是需求变更的主入口；任何迭代范围变化至少应在 `spec.md` 留下痕迹，且 PM workflow 写后会刷新 `downstream-checklist.yaml` 与 `iteration-index.yaml`
+- `iteration-index.yaml` 用来记录 capability 当前所处的 iteration / release，以及同一标签下累计发生过多少次 PM 变更
 - `spec.md` 的“变更记录”用于记录迭代级变化
 - 影响技术决策边界的变更，除更新 `architecture.md` 外，还应补充 `decisions/*.md`
 - 影响真实任务来源时，应维护 `topology/domains.yaml` 中 capability 的 `ones_tasks`
