@@ -442,3 +442,53 @@ class DesignWorkflowTest(ContextHubTestCase):
 
         design_path = self.hub_dir / "capabilities" / "voting" / "design.md"
         self.assertEqual(design_path.read_text(encoding="utf-8"), draft_text)
+
+    def test_run_design_workflow_align_falls_back_to_hub_when_figma_probe_is_blocked(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "meeting",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        draft_path = self.workdir / "design-blocked-draft.md"
+        draft_text = "# blocked fallback design\n"
+        draft_path.write_text(draft_text, encoding="utf-8")
+
+        from workflows.design_workflow import run_design_workflow
+
+        result = run_design_workflow(
+            hub_root=self.hub_dir,
+            capability="voting",
+            action="align",
+            content_file=draft_path,
+            figma_url="https://example.com/design/FILE123/Voting?node-id=12-34",
+        )
+
+        self.assertEqual(result["live_status"], "fallback_to_hub")
+        self.assertIn("未实时校验", result["warnings"][0])
+
+        design_path = self.hub_dir / "capabilities" / "voting" / "design.md"
+        self.assertEqual(design_path.read_text(encoding="utf-8"), draft_text)
+
+    def test_run_design_workflow_requires_existing_capability(self) -> None:
+        draft_path = self.workdir / "design-missing-capability-draft.md"
+        draft_text = "# missing capability design\n"
+        draft_path.write_text(draft_text, encoding="utf-8")
+
+        from workflows.design_workflow import run_design_workflow
+
+        with self.assertRaisesRegex(ValueError, "需已有 capability 或 PM 先建"):
+            run_design_workflow(
+                hub_root=self.hub_dir,
+                capability="missing-voting",
+                action="align",
+                content_file=draft_path,
+                figma_url=None,
+            )
+
+        self.assertFalse((self.hub_dir / "capabilities" / "missing-voting" / "design.md").exists())

@@ -29,6 +29,14 @@ def _find_capability_dir(hub_root: Path, capability: str) -> Path:
     return hub_root / "capabilities" / capability
 
 
+def _require_existing_capability(capability_dir: Path, capability_name: str) -> None:
+    if capability_dir.exists():
+        return
+    raise ValueError(
+        f"design workflow 需已有 capability 或 PM 先建: {capability_name}"
+    )
+
+
 def run_design_workflow(
     *,
     hub_root: str | Path,
@@ -41,6 +49,7 @@ def run_design_workflow(
     root = Path(hub_root).resolve()
     capability_name = normalize_slug(capability)
     capability_dir = _find_capability_dir(root, capability_name)
+    _require_existing_capability(capability_dir, capability_name)
     target_file = capability_target_document_path(capability_dir, "design")
     request = prepare_mutation_request(
         role="design",
