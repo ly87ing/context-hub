@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 
+from _common import load_yaml_file, normalize_slug, render_template_text, save_yaml_file, today_iso
 from yaml_compat import YAMLError, safe_load
 
 from .hub_io import load_template, render_template
@@ -12,6 +13,7 @@ from .validation import target_document_name
 
 DEFAULT_MAINTAINED_BY = "product"
 DEFAULT_CONTRIBUTORS = ["design", "engineering", "qa"]
+REQUIRED_CAPABILITY_FILES = ("spec.md", "design.md", "architecture.md", "testing.md")
 
 
 def parse_ownership_contract(text: str) -> dict:
@@ -157,6 +159,62 @@ def capability_target_document_path(capability_dir: str | Path, role: str) -> Pa
     return Path(capability_dir) / target_document_name(role)
 
 
+def load_capability_template_map(template_root: Path) -> dict[str, str]:
+    mapping = {}
+    for name in REQUIRED_CAPABILITY_FILES:
+        template_path = template_root / name
+        if not template_path.exists():
+            raise FileNotFoundError(f"缺少模板文件: {template_path}")
+        mapping[name] = template_path.read_text(encoding="utf-8")
+    return mapping
+
+
+def ensure_domain_record(domains_payload: dict, domain: str) -> dict:
+    domains = domains_payload.setdefault("domains", {})
+    return domains.setdefault(
+        domain,
+        {
+            "description": "待填写",
+            "owner": "待填写",
+            "capabilities": [],
+        },
+    )
+
+
+def render_ones_tasks_section(ones_tasks: list[str]) -> str:
+    if not ones_tasks:
+        return "- 暂无关联 ONES 工单"
+    return "\n".join(f"- {task_ref}" for task_ref in ones_tasks)
+
+
+def render_capability_documents(
+    capability_dir: Path,
+    template_map: dict[str, str],
+    title: str,
+    ones_tasks: list[str],
+) -> list[Path]:
+    replacements = {
+        "能力名称": title,
+        "date": today_iso(),
+        "description": "待填写",
+        "link": "待补充",
+        "service": "待补充",
+        "branch": "main",
+        "commit-hash": "待补充",
+        "service/team": "待补充",
+        "ones_tasks_section": render_ones_tasks_section(ones_tasks),
+    }
+    capability_dir.mkdir(parents=True, exist_ok=False)
+
+    updated_paths: list[Path] = []
+    for filename, template in template_map.items():
+        rendered = render_template_text(template, replacements)
+        document_path = capability_dir / filename
+        document_path.write_text(rendered, encoding="utf-8")
+        updated_paths.append(document_path)
+    return updated_paths
+
+
 def bootstrap_pm_capability(
     hub_root: str | Path,
     capability_name: str,
@@ -167,27 +225,26 @@ def bootstrap_pm_capability(
     maintained_by: str = DEFAULT_MAINTAINED_BY,
     ones_tasks: list[str] | None = None,
 ) -> list[Path]:
-    from _common import load_yaml_file, save_yaml_file
-    from create_capability import ensure_domain, load_template_map, render_capability_files
-
     root = Path(hub_root).resolve()
-    capability_dir = root / "capabilities" / capability_name
+    normalized_capability_name = normalize_slug(capability_name)
+    normalized_domain = normalize_slug(domain)
+    capability_dir = root / "capabilities" / normalized_capability_name
     if capability_dir.exists():
         return []
 
     template_root = root / "capabilities" / "_templates"
-    template_map = load_template_map(template_root)
-    capability_title = (title or capability_name).strip() or capability_name
+    template_map = load_capability_template_map(template_root)
+    capability_title = (title or normalized_capability_name).strip() or normalized_capability_name
     task_refs = normalize_task_refs(ones_tasks)
 
-    render_capability_files(capability_dir, template_map, capability_title, task_refs)
+    updated_paths = render_capability_documents(capability_dir, template_map, capability_title, task_refs)
 
     domains_path = root / "topology" / "domains.yaml"
     domains_payload = load_yaml_file(domains_path, {"domains": {}})
-    domain_payload = ensure_domain(domains_payload, domain)
+    domain_payload = ensure_domain_record(domains_payload, normalized_domain)
     ensure_capability_record(
         domain_payload,
-        capability_name,
+        normalized_capability_name,
         capability_title,
         status,
         ones_tasks=task_refs,
@@ -202,13 +259,12 @@ def bootstrap_pm_capability(
     )
     ensure_capability_ownership(
         ownership_payload,
-        capability_name,
-        domain,
+        normalized_capability_name,
+        normalized_domain,
         maintained_by=maintained_by,
     )
     save_yaml_file(ownership_path, ownership_payload)
 
-    updated_paths = [capability_dir / filename for filename in ("spec.md", "design.md", "architecture.md", "testing.md")]
     updated_paths.extend([domains_path, ownership_path])
 
     update_script = root / "scripts" / "update_llms_txt.py"

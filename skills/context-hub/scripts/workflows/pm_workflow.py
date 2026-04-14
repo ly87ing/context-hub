@@ -15,6 +15,8 @@ for path in (THIS_DIR, SCRIPTS_DIR):
         sys.path.insert(0, path_str)
 
 from integrations import ones_adapter
+from integrations.credentials import MissingCredentialsError
+from _common import normalize_slug
 from runtime.capability_ops import bootstrap_pm_capability, capability_target_document_path
 from runtime.hub_io import safe_write_text
 from runtime.validation import load_yaml_mapping, resolve_hub_root
@@ -53,7 +55,8 @@ def run_pm_workflow(
     task_ref: str | None = None,
 ) -> dict:
     root = Path(hub_root).resolve()
-    capability_name = str(capability).strip()
+    capability_name = normalize_slug(capability)
+    normalized_domain = normalize_slug(domain) if domain else None
     capability_dir = _find_capability_dir(root, capability_name)
     target_file = capability_target_document_path(capability_dir, "pm")
     request = prepare_mutation_request(
@@ -71,13 +74,13 @@ def run_pm_workflow(
     live_status = "fallback_to_hub"
 
     if request["action"] == "create" and not capability_dir.exists():
-        if not domain:
+        if not normalized_domain:
             raise ValueError("create action requires domain")
         updated_paths.extend(
             bootstrap_pm_capability(
                 root,
                 capability_name,
-                domain,
+                normalized_domain,
                 title=capability_name,
             )
         )
@@ -90,11 +93,10 @@ def run_pm_workflow(
         try:
             task_info = ones_adapter.get_task_info(resolved_task_ref)
             used_sources.append(summary_path if summary_payload else request["content_file"])
-            used_sources.append(Path(f"ones://task/{resolved_task_ref}"))
-            warnings.extend([])
+            used_sources.append(f"ones://task/{resolved_task_ref}")
             if ones_adapter.summarize_task(task_info):
                 live_status = "live_ok"
-        except ValueError:
+        except (MissingCredentialsError, ValueError):
             if summary_payload:
                 used_sources.append(summary_path)
             warnings.append("未实时校验 ONES 任务，已回退到 hub 内已有上下文")
@@ -103,7 +105,7 @@ def run_pm_workflow(
     safe_write_text(request["target_file"], request["content_file"].read_text(encoding="utf-8"))
     updated_paths.append(request["target_file"])
 
-    deduped_sources: list[Path] = []
+    deduped_sources: list[str | Path] = []
     seen_sources: set[str] = set()
     for source in used_sources:
         key = str(source)
