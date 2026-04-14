@@ -30,6 +30,7 @@ FALLBACK_SCHEMA_FILENAMES = {
     "domains-fragment.yaml",
     "testing-fragment.yaml",
 }
+MUTATING_ACTIONS = {"create", "extend", "revise", "align"}
 
 
 def default_hub_root(script_file: str | Path) -> Path:
@@ -175,6 +176,15 @@ def missing_export_fields(payload: dict) -> list[str]:
         if payload.get(field) in ("", None):
             missing.append(field)
     return missing
+
+
+def require_mutation_content_file(action: str, content_file: str | Path | None) -> Path | None:
+    normalized_action = str(action).strip().lower()
+    if normalized_action in MUTATING_ACTIONS and content_file in (None, ""):
+        raise ValueError(f"{normalized_action} action requires content-file")
+    if content_file in (None, ""):
+        return None
+    return Path(content_file)
 
 
 def parse_scalar(value: str):

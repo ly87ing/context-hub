@@ -5,6 +5,7 @@ from pathlib import Path
 from yaml_compat import YAMLError, safe_load
 
 from .hub_io import load_template, render_template
+from workflows.common import target_document_name
 
 
 DEFAULT_MAINTAINED_BY = "product"
@@ -148,3 +149,7 @@ def update_capability_record(
     if source_ref not in (None, ""):
         capability_record["source_ref"] = source_ref
     return capability_record
+
+
+def capability_target_document_path(capability_dir: str | Path, role: str) -> Path:
+    return Path(capability_dir) / target_document_name(role)
