@@ -7,6 +7,7 @@ from runtime.http_client import HttpClient, HttpError, Transport
 
 
 FIGMA_HOST = "www.figma.com"
+FIGMA_ALLOWED_HOSTS = {FIGMA_HOST, "figma.com"}
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,9 @@ def parse_figma_reference(figma_url: str) -> FigmaReference:
     parsed = urlparse(normalized)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError(f"invalid figma_url: {figma_url}")
+    host = str(parsed.hostname or "").lower()
+    if host not in FIGMA_ALLOWED_HOSTS:
+        raise ValueError(f"invalid figma host: {parsed.netloc}")
 
     segments = [segment for segment in parsed.path.split("/") if segment]
     if len(segments) < 2 or segments[0] not in {"design", "file"}:
@@ -87,6 +91,7 @@ def probe_figma_reference(
 
 __all__ = [
     "FIGMA_HOST",
+    "FIGMA_ALLOWED_HOSTS",
     "FigmaProbeResult",
     "FigmaReference",
     "parse_figma_reference",
