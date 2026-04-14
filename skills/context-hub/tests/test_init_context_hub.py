@@ -49,6 +49,22 @@ class InitContextHubTest(ContextHubTestCase):
         self.assertTrue((self.hub_dir / "scripts" / "sync_capability_status.py").exists())
         self.assertTrue((self.hub_dir / "scripts" / "runtime" / "commit_ops.py").exists())
 
+    def test_init_copies_workflow_skeleton_assets(self) -> None:
+        result = run_script(
+            "init_context_hub.py",
+            "--output",
+            str(self.hub_dir),
+            "--name",
+            "meeting-control",
+            "--id",
+            "meeting-control",
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertTrue((self.hub_dir / "scripts" / "workflows" / "common.py").exists())
+        self.assertTrue((self.hub_dir / "scripts" / "workflows" / "pm_workflow.py").exists())
+        self.assertTrue((self.hub_dir / "templates" / "role-intake" / "pm.md").exists())
+
     def test_init_dry_run_reports_actions_without_writing(self) -> None:
         result = run_script(
             "init_context_hub.py",

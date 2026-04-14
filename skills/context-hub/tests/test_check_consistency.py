@@ -59,6 +59,19 @@ services:
         self.assertIn("teams/engineering/exports/system-fragment.yaml", output)
         self.assertIn("last_synced_at", output)
 
+    def test_consistency_fails_when_workflow_asset_is_missing(self) -> None:
+        workflow_path = self.hub_dir / "scripts" / "workflows" / "pm_workflow.py"
+        workflow_path.parent.mkdir(parents=True, exist_ok=True)
+        workflow_path.write_text('"""temporary workflow placeholder."""\n', encoding="utf-8")
+        workflow_path.unlink()
+
+        result = run_script("check_consistency.py", cwd=self.hub_dir)
+
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 2, msg=output)
+        self.assertIn("scripts/workflows/pm_workflow.py", output)
+        self.assertIn("不存在", output)
+
     def test_consistency_returns_zero_for_clean_hub(self) -> None:
         result = run_script("check_consistency.py", cwd=self.hub_dir)
 

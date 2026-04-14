@@ -69,6 +69,19 @@ REQUIRED_ROOT_PATHS = [
     "scripts/integrations/credentials.py",
     "scripts/integrations/gitlab_adapter.py",
     "scripts/integrations/ones_adapter.py",
+    "scripts/workflows",
+    "scripts/workflows/__init__.py",
+    "scripts/workflows/common.py",
+    "scripts/workflows/pm_workflow.py",
+    "scripts/workflows/design_workflow.py",
+    "scripts/workflows/engineering_workflow.py",
+    "scripts/workflows/qa_workflow.py",
+    "scripts/workflows/maintenance_workflow.py",
+    "templates/role-intake",
+    "templates/role-intake/pm.md",
+    "templates/role-intake/design.md",
+    "templates/role-intake/engineering.md",
+    "templates/role-intake/qa.md",
 ]
 REQUIRED_TEMPLATE_FILES = ["spec.md", "design.md", "architecture.md", "testing.md"]
 

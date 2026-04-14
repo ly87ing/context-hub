@@ -167,6 +167,7 @@ def copy_runtime_scripts(skill_root: Path, output_dir: Path, dry_run: bool) -> N
         copy_file(skill_root / "scripts" / filename, target_dir / filename, dry_run)
     copy_tree(skill_root / "scripts" / "runtime", target_dir / "runtime", dry_run)
     copy_tree(skill_root / "scripts" / "integrations", target_dir / "integrations", dry_run)
+    copy_tree(skill_root / "scripts" / "workflows", target_dir / "workflows", dry_run)
 
 
 def create_team_exports(output_dir: Path, dry_run: bool) -> None:
