@@ -46,9 +46,17 @@ class InitContextHubTest(ContextHubTestCase):
         self.assertTrue((self.hub_dir / "teams" / "design" / "exports").exists())
         self.assertTrue((self.hub_dir / "teams" / "engineering" / "exports").exists())
         self.assertTrue((self.hub_dir / "teams" / "qa" / "exports").exists())
+        self.assertTrue((self.hub_dir / "topology" / "design-sources.yaml").exists())
+        self.assertTrue((self.hub_dir / "topology" / "releases.yaml").exists())
         self.assertTrue((self.hub_dir / "scripts" / "sync_capability_status.py").exists())
+        self.assertTrue((self.hub_dir / "scripts" / "sync_design_context.py").exists())
+        self.assertTrue((self.hub_dir / "scripts" / "check_semantic_consistency.py").exists())
         self.assertTrue((self.hub_dir / "scripts" / "runtime" / "commit_ops.py").exists())
         self.assertTrue((self.hub_dir / "scripts" / "runtime" / "iteration_index.py").exists())
+        self.assertTrue((self.hub_dir / "scripts" / "runtime" / "lifecycle_state.py").exists())
+        self.assertTrue((self.hub_dir / "scripts" / "runtime" / "release_index.py").exists())
+        self.assertTrue((self.hub_dir / "scripts" / "runtime" / "semantic_consistency.py").exists())
+        self.assertTrue((self.hub_dir / "scripts" / "runtime" / "maintenance_advice.py").exists())
 
     def test_init_copies_workflow_skeleton_assets(self) -> None:
         result = run_script(
@@ -65,6 +73,7 @@ class InitContextHubTest(ContextHubTestCase):
         self.assertTrue((self.hub_dir / "scripts" / "workflows" / "common.py").exists())
         self.assertTrue((self.hub_dir / "scripts" / "workflows" / "pm_workflow.py").exists())
         self.assertTrue((self.hub_dir / "templates" / "role-intake" / "pm.md").exists())
+        self.assertTrue((self.hub_dir / "templates" / "design-fragment.yaml").exists())
 
     def test_init_dry_run_reports_actions_without_writing(self) -> None:
         result = run_script(

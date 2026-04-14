@@ -435,6 +435,33 @@ def run_ones_sync(hub_root: Path, *, team_uuid: str | None = None) -> list[Path]
     return sync_capability_statuses(hub_root, team_uuid=team_uuid)
 
 
+def run_design_sync(hub_root: Path) -> Path:
+    try:
+        from sync_design_context import sync_design_sources
+    except ModuleNotFoundError:
+        return Path(hub_root).resolve() / "topology" / "design-sources.yaml"
+
+    return sync_design_sources(hub_root)
+
+
+def run_release_sync(hub_root: Path) -> Path:
+    try:
+        from runtime.release_index import refresh_release_index
+    except ModuleNotFoundError:
+        return Path(hub_root).resolve() / "topology" / "releases.yaml"
+
+    return refresh_release_index(hub_root)[0]
+
+
+def run_semantic_audit(hub_root: Path) -> dict[str, object]:
+    try:
+        from check_semantic_consistency import audit_hub_semantics
+    except ModuleNotFoundError:
+        return {"paths": [], "warnings": []}
+
+    return audit_hub_semantics(hub_root)
+
+
 def run_validation_checks(hub_root: Path) -> list[str]:
     warnings: list[str] = []
     scripts = (
@@ -468,6 +495,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("hub", nargs="?", default=".", help="context-hub 根目录")
     parser.add_argument("--sync-gitlab", action="store_true", help="刷新后执行 GitLab 拓扑同步")
     parser.add_argument("--sync-ones", action="store_true", help="刷新后执行 ONES capability 同步")
+    parser.add_argument("--sync-design", action="store_true", help="刷新后执行 Design 共享上下文同步")
     parser.add_argument("--gitlab-url", default="", help="指定用于增量同步的 GitLab repo URL")
     parser.add_argument("--gitlab-branch", default="", help="指定用于增量同步的 GitLab branch")
     parser.add_argument("--gitlab-commit", default="", help="指定用于增量同步的 GitLab commit SHA")
@@ -483,6 +511,7 @@ def run_refresh_workflow(
     *,
     sync_gitlab: bool = False,
     sync_ones: bool = False,
+    sync_design: bool = False,
     gitlab_url: str | None = None,
     gitlab_branch: str | None = None,
     gitlab_commit: str | None = None,
@@ -509,13 +538,31 @@ def run_refresh_workflow(
             "domains": hub_root / "topology" / "domains.yaml",
             "system": hub_root / "topology" / "system.yaml",
             "testing": hub_root / "topology" / "testing-sources.yaml",
+            "design": hub_root / "topology" / "design-sources.yaml",
+            "releases": hub_root / "topology" / "releases.yaml",
             "llms": hub_root / ".context" / "llms.txt",
         }
-        return {"outputs": outputs, "warnings": ["dry-run: skipped writes"], "committed": False, "dry_run": True}
+        return {
+            "outputs": outputs,
+            "warnings": ["dry-run: skipped writes"],
+            "semantic_paths": [],
+            "committed": False,
+            "dry_run": True,
+        }
 
     outputs = refresh_shared_context(hub_root)
     warnings: list[str] = []
     commit_paths = [Path(outputs[name]) for name in ("domains", "system", "testing", "llms")]
+    semantic_paths: list[Path] = []
+
+    if sync_design:
+        design_path = run_design_sync(hub_root)
+        outputs["design"] = design_path
+        commit_paths.append(Path(design_path))
+
+    release_path = run_release_sync(hub_root)
+    outputs["releases"] = release_path
+    commit_paths.append(Path(release_path))
 
     if sync_gitlab:
         try:
@@ -550,22 +597,52 @@ def run_refresh_workflow(
             commit_paths.extend(Path(path) for path in ones_paths)
 
     outputs["llms"] = refresh_llms_txt(hub_root)
-    commit_paths[3] = Path(outputs["llms"])
+    llms_index = commit_paths.index(Path(outputs["llms"])) if Path(outputs["llms"]) in commit_paths else None
+    if llms_index is None:
+        commit_paths.append(Path(outputs["llms"]))
+    else:
+        commit_paths[llms_index] = Path(outputs["llms"])
+
+    semantic_result = run_semantic_audit(hub_root)
+    semantic_paths = [Path(path) for path in semantic_result.get("paths") or []]
+    warnings.extend(str(item) for item in (semantic_result.get("warnings") or []) if str(item).strip())
+    commit_paths.extend(semantic_paths)
+
     warnings.extend(run_validation_checks(hub_root))
 
     committed = False
     if auto_commit or auto_push:
         if warnings:
             warnings.append("auto-commit skipped because warnings were reported")
-            return {"outputs": outputs, "warnings": warnings, "committed": False, "dry_run": False}
+            return {
+                "outputs": outputs,
+                "warnings": warnings,
+                "semantic_paths": semantic_paths,
+                "committed": False,
+                "dry_run": False,
+            }
+        deduped_commit_paths: list[Path] = []
+        seen_commit_paths: set[Path] = set()
+        for path in commit_paths:
+            resolved = Path(path)
+            if resolved in seen_commit_paths:
+                continue
+            seen_commit_paths.add(resolved)
+            deduped_commit_paths.append(resolved)
         committed = auto_commit_and_push(
             hub_root,
             message="chore: refresh context hub",
             push=auto_push,
-            paths=commit_paths,
+            paths=deduped_commit_paths,
         )
 
-    return {"outputs": outputs, "warnings": warnings, "committed": committed, "dry_run": False}
+    return {
+        "outputs": outputs,
+        "warnings": warnings,
+        "semantic_paths": semantic_paths,
+        "committed": committed,
+        "dry_run": False,
+    }
 
 
 def main() -> int:
@@ -576,6 +653,7 @@ def main() -> int:
             hub_root,
             sync_gitlab=args.sync_gitlab,
             sync_ones=args.sync_ones,
+            sync_design=args.sync_design,
             gitlab_url=args.gitlab_url or None,
             gitlab_branch=args.gitlab_branch or None,
             gitlab_commit=args.gitlab_commit or None,
@@ -592,6 +670,10 @@ def main() -> int:
     print(f"{prefix} {outputs['domains']}")
     print(f"{prefix} {outputs['system']}")
     print(f"{prefix} {outputs['testing']}")
+    if "design" in outputs:
+        print(f"{prefix} {outputs['design']}")
+    if "releases" in outputs:
+        print(f"{prefix} {outputs['releases']}")
     print(f"{prefix} {outputs['llms']}")
     for warning in result["warnings"]:
         print(f"⚠️  {warning}")

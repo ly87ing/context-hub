@@ -26,7 +26,12 @@ FALLBACK_SCHEMA_FILENAMES = {
     "system.yaml",
     "domains.yaml",
     "testing-sources.yaml",
+    "design-sources.yaml",
+    "releases.yaml",
+    "lifecycle-state.yaml",
+    "semantic-consistency.yaml",
     "system-fragment.yaml",
+    "design-fragment.yaml",
     "domains-fragment.yaml",
     "testing-fragment.yaml",
 }

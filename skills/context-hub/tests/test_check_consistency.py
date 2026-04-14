@@ -84,6 +84,18 @@ services:
         self.assertIn("scripts/runtime/iteration_index.py", output)
         self.assertIn("不存在", output)
 
+    def test_consistency_fails_when_semantic_audit_script_is_missing(self) -> None:
+        script_path = self.hub_dir / "scripts" / "check_semantic_consistency.py"
+        self.assertTrue(script_path.exists())
+        script_path.unlink()
+
+        result = run_script("check_consistency.py", cwd=self.hub_dir)
+
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 2, msg=output)
+        self.assertIn("scripts/check_semantic_consistency.py", output)
+        self.assertIn("不存在", output)
+
     def test_consistency_returns_zero_for_clean_hub(self) -> None:
         result = run_script("check_consistency.py", cwd=self.hub_dir)
 

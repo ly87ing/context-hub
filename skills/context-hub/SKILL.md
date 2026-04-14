@@ -30,15 +30,16 @@ description: |
 - 基于 `ones_tasks` 生成 capability `source-summary.yaml` 并回写状态
 - 检查 GitLab / ONES 凭据是否可用于后续集成
 - 运行一致性检查和 stale 审计
-- 通过 `refresh_context.py` 统一编排，并支持可选 `auto-commit` / `auto-push`
+- 通过 `refresh_context.py` 统一编排，并支持 Design / release / semantic control plane 刷新
+- 维护 capability `lifecycle-state.yaml`、`semantic-consistency.yaml` 与 hub 级 `topology/releases.yaml`
 - `scripts/workflows/*.py` 形式的 PM / Design / Engineering / QA / maintenance role workflow v1
-- `scripts/integrations/figma_adapter.py` 的 Figma URL 解析与最小 reachability probe
+- `scripts/integrations/figma_adapter.py` 的 Figma URL 解析、结构化摘要与最小 reachability probe
 - `templates/role-intake/*.md` 形式的角色 intake 模板
 
 当前没有实现：
 
-- 深度 Figma 结构化同步
-- 跨全生命周期的多角色状态机和自动流转
+- webhook / scheduler 统一托管入口
+- 更强的 semantic rules 与 AI 辅助 remediation 生成
 - 默认无人值守完成所有 `git add/commit/push` 策略
 
 如果任务需要上述能力，Skill 应明确说明它们属于后续阶段或环境集成工作，不要假装已经完成。
@@ -56,7 +57,7 @@ description: |
 - `product`：维护需求域和 capability 索引，可导出 `domains-fragment.yaml`
 - `engineering`：维护服务与依赖摘要，可导出 `system-fragment.yaml`
 - `qa`：维护测试来源摘要，可导出 `testing-fragment.yaml`
-- `design`：已预留 `teams/design/exports/` 目录，后续阶段再扩展聚合规则
+- `design`：维护 `design-fragment.yaml`，聚合到 `topology/design-sources.yaml`
 
 ## 自然语言编排关系
 
@@ -94,11 +95,11 @@ description: |
 - 动作 contract：`create` / `extend` / `revise` / `align`
 - mutating workflow 一律通过 `--content-file` 接收草稿，并由对应脚本负责写入和最小校验
 - 外部系统读取结果统一映射为 `live_ok` / `fallback_to_hub` / `blocked`
-- `pm_workflow.py` 负责 `spec.md`；只有 PM `create` 允许 bootstrap 缺失 capability；每次写后都会刷新 `downstream-checklist.yaml` 和 `iteration-index.yaml`
-- `design_workflow.py` 负责 `design.md`，可选读取 Figma URL 做轻量 probe
-- `engineering_workflow.py` 负责 `architecture.md`，可选读取 GitLab repo 做轻量 lookup
-- `qa_workflow.py` 负责 `testing.md`，优先读取 ONES 测试任务，失败时回退到 `topology/testing-sources.yaml`
-- `maintenance_workflow.py` 只做只读审计，报告缺失文档，并结合 `downstream-checklist.yaml` 提示还没跟进最新 spec 变更的 downstream 角色
+- `pm_workflow.py` 负责 `spec.md`；只有 PM `create` 允许 bootstrap 缺失 capability；每次写后都会刷新 `downstream-checklist.yaml`、`iteration-index.yaml`、`lifecycle-state.yaml` 和 hub 级 `topology/releases.yaml`
+- `design_workflow.py` 负责 `design.md`，可选读取 Figma URL 做轻量 probe，并刷新 `lifecycle-state.yaml`
+- `engineering_workflow.py` 负责 `architecture.md`，可选读取 GitLab repo 做轻量 lookup，并刷新 `lifecycle-state.yaml`
+- `qa_workflow.py` 负责 `testing.md`，优先读取 ONES 测试任务，失败时回退到 `topology/testing-sources.yaml`，并刷新 `lifecycle-state.yaml`
+- `maintenance_workflow.py` 做只读审计，输出 `pending_roles`、`blocking_issues`、`suggested_repairs`
 - PM workflow 可选接收 `--iteration` / `--release`，用于维护 capability 当前 iteration / release 索引
 
 ## 权限降级规则
@@ -118,8 +119,9 @@ description: |
 - 新增 capability：`capabilities/<name>/`、`topology/domains.yaml`、`topology/ownership.yaml`
 - 角色 workflow：`capabilities/<name>/spec.md`、`design.md`、`architecture.md`、`testing.md`
 - 团队共享摘要：`teams/<team>/exports/*.yaml`
-- 聚合刷新：`topology/domains.yaml`、`topology/system.yaml`、`topology/testing-sources.yaml`、`.context/llms.txt`
+- 聚合刷新：`topology/domains.yaml`、`topology/design-sources.yaml`、`topology/system.yaml`、`topology/testing-sources.yaml`、`topology/releases.yaml`、`.context/llms.txt`
 - ONES 摘要同步：`capabilities/<name>/source-summary.yaml`、`topology/domains.yaml`
+- semantic 审计：`capabilities/<name>/semantic-consistency.yaml`
 
 ## 写后动作
 
@@ -128,6 +130,7 @@ description: |
 - 修改 capability 或 topology：运行 `check_consistency.py`
 - 修改 team export 或 freshness：运行 `refresh_context.py` 后再跑 `check_consistency.py` / `check_stale.py`
 - 修改 `ones_tasks`：运行 `sync_capability_status.py` 或 `refresh_context.py --sync-ones`
+- 需要检查跨文档冲突时：运行 `check_semantic_consistency.py` 或 `refresh_context.py --sync-design`
 - 如果用户明确要求 git 操作，再根据当前环境单独执行；不要默认宣称已经自动提交或推送
 
 ## 本地命令
@@ -137,16 +140,18 @@ description: |
 ```bash
 python3 skills/context-hub/scripts/init_context_hub.py --output /tmp/demo-hub --name "Demo" --id demo
 python3 skills/context-hub/scripts/create_capability.py --hub /tmp/demo-hub --name voting --domain meeting --ones-task TASK-1
-python3 skills/context-hub/scripts/refresh_context.py /tmp/demo-hub --sync-gitlab --sync-ones
+python3 skills/context-hub/scripts/refresh_context.py /tmp/demo-hub --sync-gitlab --sync-ones --sync-design
 python3 skills/context-hub/scripts/refresh_context.py /tmp/demo-hub --sync-gitlab --gitlab-url git@itgitlab.xylink.com:group/service.git --gitlab-branch main --gitlab-commit abc123
 python3 skills/context-hub/scripts/bootstrap_credentials_check.py --check-ones
 python3 skills/context-hub/scripts/sync_topology.py --hub /tmp/demo-hub
 python3 skills/context-hub/scripts/sync_capability_status.py --hub /tmp/demo-hub --ones-team TEAM-UUID
+python3 skills/context-hub/scripts/sync_design_context.py --hub /tmp/demo-hub
 python3 skills/context-hub/scripts/workflows/pm_workflow.py --hub /tmp/demo-hub --capability voting --action create --domain meeting --content-file /tmp/spec.md --output-format json
 python3 skills/context-hub/scripts/workflows/design_workflow.py --hub /tmp/demo-hub --capability voting --action align --figma-url https://www.figma.com/design/FILE123/Voting --content-file /tmp/design.md --output-format json
 python3 skills/context-hub/scripts/workflows/engineering_workflow.py --hub /tmp/demo-hub --capability voting --action revise --repo-url git@itgitlab.xylink.com:group/voting-service.git --gitlab-branch main --content-file /tmp/architecture.md --output-format json
 python3 skills/context-hub/scripts/workflows/qa_workflow.py --hub /tmp/demo-hub --capability voting --action extend --content-file /tmp/testing.md --output-format json
 python3 skills/context-hub/scripts/workflows/maintenance_workflow.py --hub /tmp/demo-hub --capability voting --output-format json
+python3 skills/context-hub/scripts/check_semantic_consistency.py --hub /tmp/demo-hub
 python3 skills/context-hub/scripts/check_consistency.py --hub /tmp/demo-hub
 python3 skills/context-hub/scripts/check_stale.py --hub /tmp/demo-hub
 ```

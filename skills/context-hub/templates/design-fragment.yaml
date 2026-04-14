@@ -1,0 +1,15 @@
+# design team export contract
+# sync_design_context.py 会把这里的 sources 聚合到 topology/design-sources.yaml，并补充 figma 摘要。
+maintained_by: design
+source_system: figma
+source_ref: design-fragment.yaml
+visibility: shared
+last_synced_at: "2026-04-13T00:00:00Z"
+confidence: medium
+sources:
+  - name: voting-flow
+    capability: voting
+    figma_url: https://www.figma.com/design/FILE123/Voting?node-id=12-34
+    page_name: Voting flow
+    node_name: Primary CTA
+    status: active

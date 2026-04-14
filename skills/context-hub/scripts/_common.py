@@ -129,6 +129,8 @@ def build_llms_text(
     domains_payload: dict,
     system_payload: dict,
     testing_sources_payload: dict,
+    design_sources_payload: dict | None = None,
+    release_payload: dict | None = None,
 ) -> str:
     domains = (domains_payload or {}).get("domains") or {}
     domain_lines = []
@@ -161,6 +163,27 @@ def build_llms_text(
     else:
         source_lines.append("- 暂无测试源")
 
+    design_sources = (design_sources_payload or {}).get("sources") or []
+    design_lines = []
+    if design_sources:
+        for source in design_sources:
+            design_lines.append(
+                f"- {source.get('name', 'unknown')}: {source.get('capability', 'unknown')} / {source.get('status', 'unknown')}"
+            )
+    else:
+        design_lines.append("- 暂无设计源")
+
+    releases = (release_payload or {}).get("releases") or []
+    release_lines = []
+    if releases:
+        for release in releases:
+            release_lines.append(
+                f"- {release.get('release', 'unassigned')} / {release.get('iteration', 'backlog')}: "
+                f"{', '.join(release.get('capabilities', []) or ['暂无 capability'])}"
+            )
+    else:
+        release_lines.append("- 暂无发布索引")
+
     template = load_template("llms.txt")
     return render_template(
         template,
@@ -170,6 +193,8 @@ def build_llms_text(
             "domain_lines": "\n".join(domain_lines),
             "service_lines": "\n".join(service_lines),
             "source_lines": "\n".join(source_lines),
+            "design_lines": "\n".join(design_lines),
+            "release_lines": "\n".join(release_lines),
         },
     )
 

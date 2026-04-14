@@ -98,12 +98,49 @@ def build_source_lines(testing_payload: dict) -> str:
     return "\n".join(lines)
 
 
+def build_design_lines(design_payload: dict) -> str:
+    sources = (design_payload or {}).get("sources") or []
+    if not sources:
+        return "- 暂无设计源"
+
+    lines = []
+    sorted_sources = sorted(sources, key=lambda item: item.get("name", ""))
+    for source in sorted_sources:
+        name = source.get("name", "unknown")
+        capability = source.get("capability", "unknown")
+        status = source.get("status", "unknown")
+        figma = source.get("figma") or {}
+        title = figma.get("file_title")
+        suffix = f" / {title}" if title else ""
+        lines.append(
+            f"- {name}: {capability} / {status}{suffix}{format_metadata_suffix(source)}"
+        )
+    return "\n".join(lines)
+
+
+def build_release_lines(release_payload: dict) -> str:
+    releases = (release_payload or {}).get("releases") or []
+    if not releases:
+        return "- 暂无发布索引"
+
+    lines = []
+    for release in releases:
+        capability_names = ", ".join(release.get("capabilities") or []) or "暂无 capability"
+        lines.append(
+            f"- {release.get('release', 'unassigned')} / {release.get('iteration', 'backlog')}: "
+            f"{capability_names}"
+        )
+    return "\n".join(lines)
+
+
 def render_llms_text(
     project_name: str,
     summary: str,
     domains_payload: dict,
     system_payload: dict,
     testing_payload: dict,
+    design_payload: dict,
+    release_payload: dict,
 ) -> str:
     template = load_template("llms.txt")
     return render_template(
@@ -114,6 +151,8 @@ def render_llms_text(
             "domain_lines": build_domain_lines(domains_payload),
             "service_lines": build_service_lines(system_payload),
             "source_lines": build_source_lines(testing_payload),
+            "design_lines": build_design_lines(design_payload),
+            "release_lines": build_release_lines(release_payload),
         },
     )
 
@@ -132,8 +171,24 @@ def refresh_llms_txt(hub_root: Path) -> Path:
         hub_root / "topology" / "testing-sources.yaml",
         {"sources": []},
     )
+    design_payload = load_yaml_file(
+        hub_root / "topology" / "design-sources.yaml",
+        {"sources": []},
+    )
+    release_payload = load_yaml_file(
+        hub_root / "topology" / "releases.yaml",
+        {"releases": []},
+    )
 
-    llms_text = render_llms_text(title, summary, domains_payload, system_payload, testing_payload)
+    llms_text = render_llms_text(
+        title,
+        summary,
+        domains_payload,
+        system_payload,
+        testing_payload,
+        design_payload,
+        release_payload,
+    )
     target = hub_root / ".context" / "llms.txt"
     safe_write_text(target, llms_text)
     return target

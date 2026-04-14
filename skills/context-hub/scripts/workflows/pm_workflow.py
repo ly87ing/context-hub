@@ -21,6 +21,8 @@ from runtime.capability_ops import bootstrap_pm_capability, capability_target_do
 from runtime.downstream_checklist import write_downstream_checklist
 from runtime.hub_io import safe_write_text
 from runtime.iteration_index import write_iteration_index
+from runtime.lifecycle_state import refresh_lifecycle_state
+from runtime.release_index import refresh_release_index
 from runtime.validation import load_yaml_mapping, resolve_hub_root
 from workflows.common import build_workflow_result, prepare_mutation_request
 
@@ -125,6 +127,19 @@ def run_pm_workflow(
             source_ref=resolved_task_ref,
         )
     )
+    lifecycle_path, _ = refresh_lifecycle_state(
+        root,
+        capability=capability_name,
+        role="pm",
+        action=request["action"],
+        target_file=request["target_file"],
+        live_status=live_status,
+        warnings=warnings,
+        updated_paths=updated_paths,
+    )
+    updated_paths.append(lifecycle_path)
+    release_path, _ = refresh_release_index(root)
+    updated_paths.append(release_path)
 
     deduped_sources: list[str | Path] = []
     seen_sources: set[str] = set()

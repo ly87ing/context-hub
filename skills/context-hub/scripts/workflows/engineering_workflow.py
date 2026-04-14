@@ -20,6 +20,8 @@ from _common import normalize_slug
 from integrations import gitlab_adapter
 from runtime.capability_ops import capability_target_document_path
 from runtime.hub_io import safe_write_text
+from runtime.lifecycle_state import refresh_lifecycle_state
+from runtime.release_index import refresh_release_index
 from runtime.validation import resolve_hub_root
 from workflows.common import build_workflow_result, prepare_mutation_request
 
@@ -79,6 +81,17 @@ def run_engineering_workflow(
         request["target_file"],
         request["content_file"].read_text(encoding="utf-8"),
     )
+    lifecycle_path, _ = refresh_lifecycle_state(
+        root,
+        capability=capability_name,
+        role="engineering",
+        action=request["action"],
+        target_file=request["target_file"],
+        live_status=live_status,
+        warnings=warnings,
+        updated_paths=[request["target_file"]],
+    )
+    release_path, _ = refresh_release_index(root)
 
     deduped_sources: list[str | Path] = []
     seen_sources: set[str] = set()
@@ -98,7 +111,7 @@ def run_engineering_workflow(
         used_sources=deduped_sources,
         live_status=live_status,
         warnings=warnings,
-        updated_paths=[request["target_file"]],
+        updated_paths=[request["target_file"], lifecycle_path, release_path],
     )
 
 

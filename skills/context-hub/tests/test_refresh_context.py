@@ -130,6 +130,68 @@ sources:
         self.assertIn("freshness: 2026-04-13T08:45:00Z", llms_text)
         self.assertIn("freshness: 2026-04-13T10:00:00Z", llms_text)
 
+    def test_refresh_context_aggregates_design_exports_and_release_index(self) -> None:
+        draft_path = self.workdir / "pm-refresh-design-draft.md"
+        draft_path.write_text("# voting spec\n", encoding="utf-8")
+        pm_result = run_script(
+            "workflows/pm_workflow.py",
+            "--hub",
+            str(self.hub_dir),
+            "--capability",
+            "voting",
+            "--action",
+            "create",
+            "--domain",
+            "meeting",
+            "--content-file",
+            str(draft_path),
+            "--iteration",
+            "Sprint 12",
+            "--release",
+            "2026.04",
+            "--output-format",
+            "json",
+        )
+        self.assertEqual(pm_result.returncode, 0, msg=pm_result.stderr)
+
+        self.write_export(
+            "design",
+            "design-fragment.yaml",
+            """
+maintained_by: design
+source_system: figma
+source_ref: design-fragment.yaml
+visibility: shared
+last_synced_at: "2026-04-13T10:15:00Z"
+confidence: medium
+sources:
+  - name: voting-flow
+    capability: voting
+    figma_url: https://www.figma.com/design/FILE123/Voting?node-id=12-34
+    status: active
+""",
+        )
+
+        result = run_script("refresh_context.py", str(self.hub_dir), "--sync-design")
+
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, msg=output)
+
+        design_payload = safe_load((self.hub_dir / "topology" / "design-sources.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(design_payload["sources"][0]["name"], "voting-flow")
+        self.assertEqual(design_payload["sources"][0]["figma"]["file_key"], "FILE123")
+
+        release_payload = safe_load((self.hub_dir / "topology" / "releases.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(release_payload["releases"][0]["release"], "2026.04")
+        self.assertEqual(release_payload["releases"][0]["iteration"], "Sprint 12")
+        self.assertEqual(release_payload["releases"][0]["capabilities"], ["voting"])
+
+        llms_text = (self.hub_dir / ".context" / "llms.txt").read_text(encoding="utf-8")
+        self.assertIn("## 设计源", llms_text)
+        self.assertIn("voting-flow", llms_text)
+        self.assertIn("## 迭代 / Release", llms_text)
+        self.assertIn("2026.04 / Sprint 12", llms_text)
+
     def test_sync_topology_aggregates_engineering_exports_without_gitlab_scan(self) -> None:
         (self.hub_dir / "topology" / "system.yaml").write_text(
             """
@@ -288,10 +350,92 @@ services:
                 topology_dir / "system.yaml",
                 topology_dir / "testing-sources.yaml",
                 llms_path,
+                self.hub_dir.resolve() / "topology" / "releases.yaml",
                 summary_path,
             ],
         )
         self.assertTrue(result["committed"])
+
+    def test_run_refresh_workflow_runs_design_sync_release_index_and_semantic_audit(self) -> None:
+        topology_dir = self.hub_dir / "topology"
+        llms_path = self.hub_dir / ".context" / "llms.txt"
+        design_path = topology_dir / "design-sources.yaml"
+        release_path = topology_dir / "releases.yaml"
+        semantic_path = self.hub_dir / "capabilities" / "voting" / "semantic-consistency.yaml"
+        with (
+            patch.object(
+                refresh_context,
+                "refresh_shared_context",
+                return_value={
+                    "domains": topology_dir / "domains.yaml",
+                    "system": topology_dir / "system.yaml",
+                    "testing": topology_dir / "testing-sources.yaml",
+                    "llms": llms_path,
+                },
+            ),
+            patch.object(refresh_context, "run_design_sync", return_value=design_path) as design_mock,
+            patch.object(refresh_context, "run_release_sync", return_value=release_path) as release_mock,
+            patch.object(
+                refresh_context,
+                "run_semantic_audit",
+                return_value={"paths": [semantic_path], "warnings": []},
+            ) as semantic_mock,
+            patch.object(refresh_context, "refresh_llms_txt", return_value=llms_path),
+            patch.object(refresh_context, "run_validation_checks", return_value=[]),
+        ):
+            result = refresh_context.run_refresh_workflow(
+                self.hub_dir,
+                sync_design=True,
+            )
+
+        design_mock.assert_called_once_with(self.hub_dir.resolve())
+        release_mock.assert_called_once_with(self.hub_dir.resolve())
+        semantic_mock.assert_called_once_with(self.hub_dir.resolve())
+        self.assertEqual(result["outputs"]["design"], design_path)
+        self.assertEqual(result["outputs"]["releases"], release_path)
+        self.assertEqual(result["semantic_paths"], [semantic_path])
+
+    def test_run_refresh_workflow_skips_commit_when_semantic_audit_reports_warnings(self) -> None:
+        topology_dir = self.hub_dir / "topology"
+        llms_path = self.hub_dir / ".context" / "llms.txt"
+        design_path = topology_dir / "design-sources.yaml"
+        release_path = topology_dir / "releases.yaml"
+        semantic_path = self.hub_dir / "capabilities" / "voting" / "semantic-consistency.yaml"
+        with (
+            patch.object(
+                refresh_context,
+                "refresh_shared_context",
+                return_value={
+                    "domains": topology_dir / "domains.yaml",
+                    "system": topology_dir / "system.yaml",
+                    "testing": topology_dir / "testing-sources.yaml",
+                    "llms": llms_path,
+                },
+            ),
+            patch.object(refresh_context, "run_design_sync", return_value=design_path),
+            patch.object(refresh_context, "run_release_sync", return_value=release_path),
+            patch.object(
+                refresh_context,
+                "run_semantic_audit",
+                return_value={
+                    "paths": [semantic_path],
+                    "warnings": ["semantic audit: testing.md 未覆盖 design 状态"],
+                },
+            ),
+            patch.object(refresh_context, "refresh_llms_txt", return_value=llms_path),
+            patch.object(refresh_context, "run_validation_checks", return_value=[]),
+            patch.object(refresh_context, "auto_commit_and_push", return_value=True) as commit_mock,
+        ):
+            result = refresh_context.run_refresh_workflow(
+                self.hub_dir,
+                sync_design=True,
+                auto_commit=True,
+            )
+
+        commit_mock.assert_not_called()
+        self.assertFalse(result["committed"])
+        self.assertIn("semantic audit", result["warnings"][0])
+        self.assertIn("auto-commit skipped", result["warnings"][-1])
 
     def test_run_refresh_workflow_threads_repo_branch_and_commit_to_gitlab_sync(self) -> None:
         topology_dir = self.hub_dir / "topology"

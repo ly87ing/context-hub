@@ -151,3 +151,46 @@ services:
         output = result.stdout + result.stderr
         self.assertEqual(result.returncode, 1, msg=output)
         self.assertIn("capability voting 已 stale", output)
+
+    def test_stale_blocks_when_semantic_consistency_has_blockers(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "product",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        semantic_path = self.hub_dir / "capabilities" / "voting" / "semantic-consistency.yaml"
+        semantic_path.write_text(
+            safe_dump(
+                {
+                    "capability": "voting",
+                    "audited_at": "2026-04-13T10:00:00Z",
+                    "status": "fail",
+                    "issues": [
+                        {
+                            "severity": "blocking",
+                            "rule_id": "design-testing-state-coverage",
+                            "message": "testing.md 未覆盖 design 关键状态",
+                            "source_files": ["capabilities/voting/design.md", "capabilities/voting/testing.md"],
+                            "suggested_role": "qa",
+                        }
+                    ],
+                    "blocking_issue_count": 1,
+                    "warning_issue_count": 0,
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        result = run_script("check_stale.py", "--warn-days", "30", cwd=self.hub_dir)
+
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 2, msg=output)
+        self.assertIn("semantic consistency blocker", output)

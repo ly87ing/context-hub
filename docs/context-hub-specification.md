@@ -123,11 +123,11 @@ role workflow v1 由 `SKILL.md` 和 `scripts/workflows/*.py` 共同构成：
 - mutating workflow 一律通过 `--content-file` 接收草稿，再由脚本负责写入目标文档
 - 外部系统读取结果统一映射为 `live_ok` / `fallback_to_hub` / `blocked`
 - `scripts/workflows/common.py` 提供 shared helper，包括 role normalization、target-file mapping、mutation request 和统一结果结构
-- `scripts/workflows/pm_workflow.py` 写 `spec.md`；只有 PM `create` 可以 bootstrap 缺失 capability；每次写后都会刷新 `downstream-checklist.yaml` 和 `iteration-index.yaml`
-- `scripts/workflows/design_workflow.py` 写 `design.md`；可选读取 Figma URL 并做轻量 probe
-- `scripts/workflows/engineering_workflow.py` 写 `architecture.md`；可选读取 GitLab repo 并做轻量 lookup
-- `scripts/workflows/qa_workflow.py` 写 `testing.md`；优先读取 ONES 测试任务，失败时回退到 `topology/testing-sources.yaml`
-- `scripts/workflows/maintenance_workflow.py` 只做只读审计，报告缺失文档，并结合 `downstream-checklist.yaml` 提示哪些 downstream 角色还没跟进最新 spec 变更
+- `scripts/workflows/pm_workflow.py` 写 `spec.md`；只有 PM `create` 可以 bootstrap 缺失 capability；每次写后都会刷新 `downstream-checklist.yaml`、`iteration-index.yaml`、`lifecycle-state.yaml` 和 hub 级 `topology/releases.yaml`
+- `scripts/workflows/design_workflow.py` 写 `design.md`；可选读取 Figma URL 并做轻量 probe，同时刷新 `lifecycle-state.yaml`
+- `scripts/workflows/engineering_workflow.py` 写 `architecture.md`；可选读取 GitLab repo 并做轻量 lookup，同时刷新 `lifecycle-state.yaml`
+- `scripts/workflows/qa_workflow.py` 写 `testing.md`；优先读取 ONES 测试任务，失败时回退到 `topology/testing-sources.yaml`，同时刷新 `lifecycle-state.yaml`
+- `scripts/workflows/maintenance_workflow.py` 做只读审计，结合 `lifecycle-state.yaml`、`downstream-checklist.yaml` 和 `semantic-consistency.yaml` 返回 `pending_roles`、`blocking_issues`、`suggested_repairs`
 - PM workflow 可选接收 `iteration` / `release` 标签，并把它们收敛到 capability 下的 `iteration-index.yaml`
 
 #### 4.3.1 迭代变更维护规则
@@ -148,7 +148,7 @@ role workflow v1 由 `SKILL.md` 和 `scripts/workflows/*.py` 共同构成：
 维护原则如下：
 
 - 不要求每次迭代机械地重写四份文档；只同步受影响的角色文档
-- `spec.md` 是需求变更的主入口；任何迭代范围变化至少应在 `spec.md` 留下痕迹，且 PM workflow 写后会刷新 `downstream-checklist.yaml` 与 `iteration-index.yaml`
+- `spec.md` 是需求变更的主入口；任何迭代范围变化至少应在 `spec.md` 留下痕迹，且 PM workflow 写后会刷新 `downstream-checklist.yaml`、`iteration-index.yaml` 与 `lifecycle-state.yaml`
 - `iteration-index.yaml` 用来记录 capability 当前所处的 iteration / release，以及同一标签下累计发生过多少次 PM 变更
 - `spec.md` 的“变更记录”用于记录迭代级变化
 - 影响技术决策边界的变更，除更新 `architecture.md` 外，还应补充 `decisions/*.md`
@@ -169,14 +169,17 @@ role workflow v1 由 `SKILL.md` 和 `scripts/workflows/*.py` 共同构成：
 `refresh_context.py` 当前负责编排本地聚合与可选同步：
 
 - 从 `product` 读取 `domains-fragment.yaml`
+- 从 `design` 读取 `design-fragment.yaml`
 - 从 `engineering` 读取 `system-fragment.yaml`
 - 从 `qa` 读取 `testing-fragment.yaml`
 - 合并到 `topology/*`
+- 刷新 `topology/releases.yaml`
 - 刷新 `.context/llms.txt`
 - 可选执行 `sync_topology.py`
 - 可选执行 `sync_capability_status.py`
-- 写入后自动执行 `check_consistency.py` / `check_stale.py`
-- 可选执行 `auto-commit` / `auto-push`
+- 可选执行 `sync_design_context.py`
+- 写入后自动执行 `check_consistency.py` / `check_stale.py` / `check_semantic_consistency.py`
+- 仅在没有 validation warning 和 semantic warning 时执行 `auto-commit` / `auto-push`
 - webhook 增量模式支持 `--gitlab-url` + `--gitlab-branch` + `--gitlab-commit`，先做 changed-files gating，再缩小 GitLab enrichment 的作用域
 
 如果 export 之间出现冲突，脚本会报错退出；webhook 增量模式下 `repo/branch/commit` 缺失或 GitLab changed-files 读取失败也会直接报错退出。repo 未命中、branch 不匹配、`default_branch` 缺失、空 changed files、docs-only commit 只会返回信息性 skip，不会单独升级成 warning。validation warning 或显式 error decision 仍会阻断自动提交。
@@ -222,13 +225,21 @@ role workflow v1 由 `SKILL.md` 和 `scripts/workflows/*.py` 共同构成：
 - `teams/*/exports/` 是否存在
 - export metadata 是否完整
 - `ones_tasks` 对应 capability 是否存在 `source-summary.yaml`
-- `.context/llms.txt` 是否包含共享索引、ownership / freshness 标记
+- `.context/llms.txt` 是否包含共享索引、ownership / freshness 标记，以及 design / release 索引
+- `scripts/runtime/lifecycle_state.py`、`release_index.py`、`semantic_consistency.py`、`maintenance_advice.py` 等 control-plane 资产
+
+`check_semantic_consistency.py` 会：
+
+- 按 capability 生成 `semantic-consistency.yaml`
+- 检查 `spec.md` / `design.md` / `architecture.md` / `testing.md` 与共享 topology 之间的关键语义冲突
+- 把 issue 结构化到 `severity`、`rule_id`、`source_files`、`suggested_role`
 
 `check_stale.py` 会检查：
 
 - export 的 `last_synced_at` 是否超期
 - `in-progress` capability 是否缺失关键文档，造成下游阻塞
 - 带 `ones_tasks` 的 capability 是否长期未同步
+- `lifecycle-state.yaml` 和 `semantic-consistency.yaml` 是否长期未刷新，或已产生 blocker
 
 ## 5. 自然语言编排与脚本关系
 

@@ -15,6 +15,8 @@ for path in (THIS_DIR, SCRIPTS_DIR):
 
 from runtime.hub_paths import role_intake_template_path
 from runtime.capability_ops import capability_target_document_path
+from runtime.lifecycle_state import lifecycle_state_path
+from runtime.release_index import release_index_path
 from runtime.validation import parse_freshness
 from test_support import ContextHubTestCase, run_script
 from workflows.common import build_workflow_result, normalize_role, prepare_mutation_request, target_document_name
@@ -135,6 +137,11 @@ class RoleWorkflowContractTest(ContextHubTestCase):
             capability_dir / "design.md",
         )
 
+    def test_lifecycle_and_release_paths_are_stable_contracts(self) -> None:
+        capability_dir = self.hub_dir / "capabilities" / "meeting-control"
+        self.assertEqual(lifecycle_state_path(capability_dir), capability_dir / "lifecycle-state.yaml")
+        self.assertEqual(release_index_path(self.hub_dir), self.hub_dir / "topology" / "releases.yaml")
+
 
 class PMWorkflowTest(ContextHubTestCase):
     def setUp(self) -> None:
@@ -180,6 +187,16 @@ class PMWorkflowTest(ContextHubTestCase):
         self.assertTrue(spec_path.exists())
         self.assertEqual(spec_path.read_text(encoding="utf-8"), draft_text)
 
+        lifecycle_payload = safe_load(
+            (self.hub_dir / "capabilities" / "voting" / "lifecycle-state.yaml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(lifecycle_payload["current_role"], "pm")
+        self.assertEqual(lifecycle_payload["next_role"], "design")
+        self.assertEqual(lifecycle_payload["pending"], ["design.md", "architecture.md", "testing.md"])
+
+        releases_payload = safe_load((self.hub_dir / "topology" / "releases.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(releases_payload["releases"][0]["capabilities"], ["voting"])
+
     def test_pm_create_normalizes_capability_and_domain_slug(self) -> None:
         draft_path = self.workdir / "pm-slug-draft.md"
         draft_text = "# Voting Board draft\n"
@@ -212,6 +229,11 @@ class PMWorkflowTest(ContextHubTestCase):
         capability_entry = domains_payload["domains"]["meeting-ops"]["capabilities"][0]
         self.assertEqual(capability_entry["name"], "voting-board")
         self.assertEqual(capability_entry["path"], "capabilities/voting-board/")
+
+        lifecycle_payload = safe_load(
+            (self.hub_dir / "capabilities" / "voting-board" / "lifecycle-state.yaml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(lifecycle_payload["current_role"], "pm")
 
     def test_run_pm_workflow_align_returns_live_ok_when_ones_lookup_succeeds(self) -> None:
         create_result = run_script(
@@ -587,6 +609,10 @@ class DesignWorkflowTest(ContextHubTestCase):
         design_path = self.hub_dir / "capabilities" / "voting" / "design.md"
         self.assertEqual(design_path.read_text(encoding="utf-8"), draft_text)
 
+        lifecycle_payload = safe_load((self.hub_dir / "capabilities" / "voting" / "lifecycle-state.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(lifecycle_payload["current_role"], "design")
+        self.assertEqual(lifecycle_payload["next_role"], "engineering")
+
     def test_run_design_workflow_align_falls_back_to_hub_without_live_figma_validation(self) -> None:
         create_result = run_script(
             "create_capability.py",
@@ -619,6 +645,9 @@ class DesignWorkflowTest(ContextHubTestCase):
         design_path = self.hub_dir / "capabilities" / "voting" / "design.md"
         self.assertEqual(design_path.read_text(encoding="utf-8"), draft_text)
 
+        lifecycle_payload = safe_load((self.hub_dir / "capabilities" / "voting" / "lifecycle-state.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(lifecycle_payload["current_role"], "design")
+
     def test_run_design_workflow_align_falls_back_to_hub_when_figma_probe_is_blocked(self) -> None:
         create_result = run_script(
             "create_capability.py",
@@ -650,6 +679,9 @@ class DesignWorkflowTest(ContextHubTestCase):
 
         design_path = self.hub_dir / "capabilities" / "voting" / "design.md"
         self.assertEqual(design_path.read_text(encoding="utf-8"), draft_text)
+
+        lifecycle_payload = safe_load((self.hub_dir / "capabilities" / "voting" / "lifecycle-state.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(lifecycle_payload["current_role"], "design")
 
     def test_run_design_workflow_requires_existing_capability(self) -> None:
         draft_path = self.workdir / "design-missing-capability-draft.md"
@@ -721,6 +753,10 @@ class EngineeringWorkflowTest(ContextHubTestCase):
         architecture_path = self.hub_dir / "capabilities" / "voting" / "architecture.md"
         self.assertEqual(architecture_path.read_text(encoding="utf-8"), draft_text)
 
+        lifecycle_payload = safe_load((self.hub_dir / "capabilities" / "voting" / "lifecycle-state.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(lifecycle_payload["current_role"], "engineering")
+        self.assertEqual(lifecycle_payload["next_role"], "qa")
+
     def test_run_engineering_workflow_align_falls_back_to_hub_when_gitlab_lookup_fails(self) -> None:
         create_result = run_script(
             "create_capability.py",
@@ -757,6 +793,9 @@ class EngineeringWorkflowTest(ContextHubTestCase):
 
         architecture_path = self.hub_dir / "capabilities" / "voting" / "architecture.md"
         self.assertEqual(architecture_path.read_text(encoding="utf-8"), draft_text)
+
+        lifecycle_payload = safe_load((self.hub_dir / "capabilities" / "voting" / "lifecycle-state.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(lifecycle_payload["current_role"], "engineering")
 
 
 class QAWorkflowTest(ContextHubTestCase):
@@ -810,6 +849,11 @@ class QAWorkflowTest(ContextHubTestCase):
         testing_path = self.hub_dir / "capabilities" / "voting" / "testing.md"
         self.assertEqual(testing_path.read_text(encoding="utf-8"), draft_text)
 
+        lifecycle_payload = safe_load((self.hub_dir / "capabilities" / "voting" / "lifecycle-state.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(lifecycle_payload["current_role"], "qa")
+        self.assertEqual(lifecycle_payload["next_role"], "maintenance")
+        self.assertEqual(lifecycle_payload["blockers"], [])
+
     def test_run_qa_workflow_align_falls_back_to_testing_sources_when_ones_lookup_fails(self) -> None:
         create_result = run_script(
             "create_capability.py",
@@ -846,6 +890,10 @@ class QAWorkflowTest(ContextHubTestCase):
 
         testing_path = self.hub_dir / "capabilities" / "voting" / "testing.md"
         self.assertEqual(testing_path.read_text(encoding="utf-8"), draft_text)
+
+        lifecycle_payload = safe_load((self.hub_dir / "capabilities" / "voting" / "lifecycle-state.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(lifecycle_payload["current_role"], "qa")
+        self.assertEqual(lifecycle_payload["next_role"], "maintenance")
 
 
 class MaintenanceWorkflowTest(ContextHubTestCase):
@@ -917,6 +965,7 @@ class MaintenanceWorkflowTest(ContextHubTestCase):
         self.assertEqual(result["next_role"], "design")
         self.assertEqual(result["next_action"], "align")
         self.assertIn("design", result["warnings"][0])
+        self.assertEqual(result["suggested_repairs"][0]["role"], "design")
 
     def test_run_maintenance_workflow_skips_roles_updated_after_checklist(self) -> None:
         create_result = run_script(
@@ -956,3 +1005,51 @@ class MaintenanceWorkflowTest(ContextHubTestCase):
 
         self.assertNotIn("pending_roles", result)
         self.assertNotIn("next_role", result)
+
+    def test_run_maintenance_workflow_surfaces_semantic_blocking_issues(self) -> None:
+        create_result = run_script(
+            "create_capability.py",
+            "--hub",
+            str(self.hub_dir),
+            "--name",
+            "voting",
+            "--domain",
+            "meeting",
+        )
+        self.assertEqual(create_result.returncode, 0, msg=create_result.stderr)
+
+        semantic_path = self.hub_dir / "capabilities" / "voting" / "semantic-consistency.yaml"
+        semantic_path.write_text(
+            safe_dump(
+                {
+                    "capability": "voting",
+                    "audited_at": "2026-04-14T10:00:00Z",
+                    "status": "fail",
+                    "issues": [
+                        {
+                            "severity": "blocking",
+                            "rule_id": "design-testing-state-coverage",
+                            "message": "testing.md 未覆盖 design 关键状态",
+                            "source_files": [
+                                "capabilities/voting/design.md",
+                                "capabilities/voting/testing.md",
+                            ],
+                            "suggested_role": "qa",
+                        }
+                    ],
+                    "blocking_issue_count": 1,
+                    "warning_issue_count": 0,
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        from workflows.maintenance_workflow import run_maintenance_workflow
+
+        result = run_maintenance_workflow(self.hub_dir, capability="voting")
+
+        self.assertEqual(result["blocking_issues"][0]["severity"], "blocking")
+        self.assertEqual(result["blocking_issues"][0]["role"], "qa")
+        self.assertEqual(result["suggested_repairs"][0]["role"], "qa")

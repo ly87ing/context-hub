@@ -74,6 +74,34 @@ class FigmaAdapterTest(unittest.TestCase):
 
         self.assertEqual(result.status, "ok")
         self.assertEqual(result.file_key, "FILE123")
+        self.assertIsNotNone(result.summary)
+        self.assertEqual(result.summary.file.file_key, "FILE123")
+        self.assertEqual(result.summary.file.file_title, "Voting")
+        self.assertEqual(result.summary.selection.kind, "node")
+        self.assertEqual(result.summary.selection.node_id, "12:34")
+
+    def test_probe_figma_reference_reports_file_scope_without_node_id(self) -> None:
+        from integrations import figma_adapter
+        from runtime.http_client import HttpResponse
+
+        url = "https://www.figma.com/design/FILE123/Voting"
+        transport = FakeTransport(
+            {
+                ("GET", url): HttpResponse(
+                    status=200,
+                    headers={},
+                    body=b"ok",
+                    url=url,
+                )
+            }
+        )
+
+        result = figma_adapter.probe_figma_reference(url, transport=transport)
+
+        self.assertEqual(result.status, "ok")
+        self.assertIsNotNone(result.summary)
+        self.assertEqual(result.summary.selection.kind, "file")
+        self.assertIsNone(result.summary.selection.node_id)
 
     def test_probe_figma_reference_rejects_non_figma_host(self) -> None:
         from integrations import figma_adapter

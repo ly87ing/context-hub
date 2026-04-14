@@ -143,6 +143,79 @@ def check_capability_sync_freshness(
                 )
 
 
+def check_capability_control_plane(
+    hub_root: Path,
+    warn_days: int,
+    errors: list[str],
+    warnings: list[str],
+) -> None:
+    capability_root = hub_root / "capabilities"
+    if not capability_root.exists():
+        return
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=warn_days)
+    now = datetime.now(timezone.utc)
+
+    for capability_dir in sorted(path for path in capability_root.iterdir() if path.is_dir() and not path.name.startswith("_")):
+        capability_name = capability_dir.name
+
+        lifecycle_path = capability_dir / "lifecycle-state.yaml"
+        if lifecycle_path.exists():
+            try:
+                lifecycle_payload = load_yaml_mapping(lifecycle_path)
+            except ValueError as exc:
+                errors.append(str(exc).replace(str(hub_root), ".").replace("./", ""))
+            else:
+                updated_at = lifecycle_payload.get("updated_at")
+                if updated_at not in ("", None):
+                    try:
+                        freshness = parse_freshness(updated_at)
+                    except ValueError:
+                        warnings.append(f"capability {capability_name} lifecycle-state updated_at 无法解析: {updated_at}")
+                    else:
+                        if freshness < cutoff:
+                            age_days = (now - freshness).days
+                            warnings.append(
+                                f"capability {capability_name} lifecycle-state 已 stale: updated_at={format_freshness(freshness)}, {age_days} 天前"
+                            )
+                if str(lifecycle_payload.get("platform_status") or "").strip().lower() == "blocked":
+                    blockers = ", ".join(str(item) for item in (lifecycle_payload.get("blockers") or []) if str(item).strip())
+                    errors.append(
+                        f"capability {capability_name} 存在 lifecycle blocker: {blockers or '需要 maintenance 处理'}"
+                    )
+
+        semantic_path = capability_dir / "semantic-consistency.yaml"
+        if not semantic_path.exists():
+            continue
+        try:
+            semantic_payload = load_yaml_mapping(semantic_path)
+        except ValueError as exc:
+            errors.append(str(exc).replace(str(hub_root), ".").replace("./", ""))
+            continue
+
+        audited_at = semantic_payload.get("audited_at") or semantic_payload.get("generated_at")
+        if audited_at not in ("", None):
+            try:
+                freshness = parse_freshness(audited_at)
+            except ValueError:
+                warnings.append(f"capability {capability_name} semantic consistency 时间戳无法解析: {audited_at}")
+            else:
+                if freshness < cutoff:
+                    age_days = (now - freshness).days
+                    warnings.append(
+                        f"capability {capability_name} semantic-consistency 已 stale: audited_at={format_freshness(freshness)}, {age_days} 天前"
+                    )
+
+        if int(semantic_payload.get("blocking_issue_count") or 0) > 0:
+            first_issue = ""
+            issues = semantic_payload.get("issues") or []
+            if issues and isinstance(issues[0], dict):
+                first_issue = str(issues[0].get("message") or "").strip()
+            errors.append(
+                f"capability {capability_name} 存在 semantic consistency blocker: {first_issue or '请运行 maintenance workflow'}"
+            )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="检测联邦 context-hub 的 stale 风险")
     parser.add_argument("--hub", help="context-hub 根目录，默认自动识别")
@@ -162,6 +235,7 @@ def main() -> int:
     check_stale_exports(hub_root, args.warn_days, errors, warnings)
     check_in_progress_capabilities(hub_root, domains_payload, errors)
     check_capability_sync_freshness(hub_root, domains_payload, args.warn_days, warnings)
+    check_capability_control_plane(hub_root, args.warn_days, errors, warnings)
 
     if errors:
         print("❌ 阻塞项:")

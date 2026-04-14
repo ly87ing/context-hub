@@ -17,8 +17,9 @@ for path in (THIS_DIR, SCRIPTS_DIR):
         sys.path.insert(0, path_str)
 
 from _common import normalize_slug
-from runtime.downstream_checklist import list_pending_downstream_roles, load_downstream_checklist
-from runtime.validation import REQUIRED_CAPABILITY_FILES, relative_path, resolve_hub_root, target_document_name
+from runtime.lifecycle_state import load_lifecycle_state
+from runtime.maintenance_advice import build_maintenance_advice
+from runtime.validation import REQUIRED_CAPABILITY_FILES, load_yaml_mapping, relative_path, resolve_hub_root, target_document_name
 
 
 NEXT_ROLE_BY_DOCUMENT = {
@@ -44,56 +45,134 @@ def _iter_capability_dirs(hub_root: Path, capability: str | None) -> list[Path]:
     )
 
 
+DOCUMENT_BY_ROLE = {
+    "pm": "spec.md",
+    "design": "design.md",
+    "engineering": "architecture.md",
+    "qa": "testing.md",
+}
+
+
+def _load_semantic_payload(capability_dir: Path) -> dict[str, object] | None:
+    path = capability_dir / "semantic-consistency.yaml"
+    if not path.exists():
+        return None
+    return load_yaml_mapping(path)
+
+
+def _append_unique(values: list[str], value: str) -> None:
+    if value not in values:
+        values.append(value)
+
+
+def _append_unique_dict(records: list[dict[str, object]], record: dict[str, object]) -> None:
+    if record not in records:
+        records.append(record)
+
+
 def run_maintenance_workflow(hub_root: str | Path, *, capability: str | None = None) -> dict[str, object]:
     root = Path(hub_root).resolve()
     warnings: list[str] = []
     next_role: str | None = None
+    next_action: str | None = None
     pending_roles: list[str] = []
-    seen_pending_roles: set[str] = set()
+    pending: list[str] = []
+    blockers: list[str] = []
+    blocking_issues: list[dict[str, object]] = []
+    suggested_repairs: list[dict[str, object]] = []
 
     capability_dirs = _iter_capability_dirs(root, capability)
     if capability and not capability_dirs[0].exists():
         warnings.append(f"{relative_path(capability_dirs[0], root)}/ 不存在")
         next_role = "pm"
+        next_action = "create"
 
     for capability_dir in capability_dirs:
         if not capability_dir.exists():
             continue
-        has_missing_documents = False
         for filename in REQUIRED_CAPABILITY_FILES:
             document_path = capability_dir / filename
             if document_path.exists():
                 continue
-            has_missing_documents = True
             warnings.append(f"{relative_path(document_path, root)} 不存在")
-            if next_role is None:
-                next_role = NEXT_ROLE_BY_DOCUMENT.get(filename)
-        if has_missing_documents:
-            continue
-
-        checklist_payload = load_downstream_checklist(capability_dir)
-        for role in list_pending_downstream_roles(capability_dir, checklist_payload):
-            warnings.append(
-                f"{relative_path(capability_dir / target_document_name(role), root)} 落后于最新 spec 变更，建议 {role} 执行 align"
-            )
-            if role not in seen_pending_roles:
-                seen_pending_roles.add(role)
-                pending_roles.append(role)
+            role_name = NEXT_ROLE_BY_DOCUMENT.get(filename)
+            if role_name:
+                _append_unique(pending_roles, role_name)
+                _append_unique(pending, filename)
+                _append_unique(blockers, filename)
+                _append_unique_dict(
+                    suggested_repairs,
+                    {
+                        "role": role_name,
+                        "action": "create",
+                        "document": filename,
+                        "reason": f"{filename} 缺失，需先补齐基础文档",
+                        "path": relative_path(document_path, root),
+                    },
+                )
+                _append_unique_dict(
+                    blocking_issues,
+                    {
+                        "severity": "blocking",
+                        "role": role_name,
+                        "code": "missing_document",
+                        "document": filename,
+                        "message": f"{filename} 缺失，阻塞 downstream 协作",
+                    },
+                )
                 if next_role is None:
-                    next_role = role
+                    next_role = role_name
+                    next_action = "create"
+
+        lifecycle_payload = load_lifecycle_state(capability_dir)
+        semantic_payload = _load_semantic_payload(capability_dir)
+        advice = build_maintenance_advice(
+            root,
+            capability_dir=capability_dir,
+            lifecycle_payload=lifecycle_payload,
+            semantic_payload=semantic_payload,
+        )
+
+        for role_name in advice["pending_roles"]:
+            _append_unique(pending_roles, role_name)
+            if role_name in DOCUMENT_BY_ROLE:
+                warnings.append(
+                    f"{relative_path(capability_dir / DOCUMENT_BY_ROLE[role_name], root)} 落后于最新上下文，建议 {role_name} 执行 align"
+                )
+        for document_name in advice["pending"]:
+            _append_unique(pending, document_name)
+        for blocker in advice["blockers"]:
+            _append_unique(blockers, blocker)
+        for issue in advice["blocking_issues"]:
+            _append_unique_dict(blocking_issues, issue)
+            message = str(issue.get("message") or "").strip()
+            if message:
+                warnings.append(message)
+        for repair in advice["suggested_repairs"]:
+            _append_unique_dict(suggested_repairs, repair)
+
+        if next_role is None and advice.get("next_role"):
+            next_role = str(advice["next_role"])
+            next_action = str(advice.get("next_action") or "align")
 
     result: dict[str, object] = {
         "role": "maintenance",
         "action": "audit",
         "capability": None if capability is None else normalize_slug(capability),
         "warnings": warnings,
+        "blocking_issues": blocking_issues,
+        "suggested_repairs": suggested_repairs,
         "updated_paths": [],
     }
     if pending_roles:
         result["pending_roles"] = pending_roles
+    if pending:
+        result["pending"] = pending
+    if blockers:
+        result["blockers"] = blockers
     if next_role is not None:
         result["next_role"] = next_role
-        result["next_action"] = "align"
+        result["next_action"] = next_action or "align"
     return result
 
 

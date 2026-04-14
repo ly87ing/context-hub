@@ -41,6 +41,8 @@ REQUIRED_ROOT_PATHS = [
     "topology/system.yaml",
     "topology/domains.yaml",
     "topology/testing-sources.yaml",
+    "topology/design-sources.yaml",
+    "topology/releases.yaml",
     "topology/ownership.yaml",
     "decisions/_index.md",
     "decisions/_template.md",
@@ -53,7 +55,9 @@ REQUIRED_ROOT_PATHS = [
     "scripts/update_llms_txt.py",
     "scripts/check_consistency.py",
     "scripts/check_stale.py",
+    "scripts/check_semantic_consistency.py",
     "scripts/sync_topology.py",
+    "scripts/sync_design_context.py",
     "scripts/sync_capability_status.py",
     "scripts/_common.py",
     "scripts/yaml_compat.py",
@@ -65,10 +69,15 @@ REQUIRED_ROOT_PATHS = [
     "scripts/runtime/hub_io.py",
     "scripts/runtime/hub_paths.py",
     "scripts/runtime/iteration_index.py",
+    "scripts/runtime/lifecycle_state.py",
+    "scripts/runtime/release_index.py",
+    "scripts/runtime/semantic_consistency.py",
+    "scripts/runtime/maintenance_advice.py",
     "scripts/runtime/validation.py",
     "scripts/integrations",
     "scripts/integrations/__init__.py",
     "scripts/integrations/credentials.py",
+    "scripts/integrations/figma_adapter.py",
     "scripts/integrations/gitlab_adapter.py",
     "scripts/integrations/ones_adapter.py",
     "scripts/workflows",
@@ -84,6 +93,7 @@ REQUIRED_ROOT_PATHS = [
     "templates/role-intake/design.md",
     "templates/role-intake/engineering.md",
     "templates/role-intake/qa.md",
+    "templates/design-fragment.yaml",
 ]
 REQUIRED_TEMPLATE_FILES = ["spec.md", "design.md", "architecture.md", "testing.md"]
 
@@ -335,6 +345,10 @@ def check_llms_txt(
         warnings.append(".context/llms.txt 缺少业务域索引")
     if "## 服务清单" not in content:
         warnings.append(".context/llms.txt 缺少服务清单")
+    if "## 设计源" not in content:
+        warnings.append(".context/llms.txt 缺少设计源索引")
+    if "## 迭代 / Release" not in content:
+        warnings.append(".context/llms.txt 缺少迭代 / Release 索引")
 
     needs_freshness = any(payload.get("last_synced_at") for _, _, payload in export_records)
     needs_ownership = any(payload.get("maintained_by") for _, _, payload in export_records)

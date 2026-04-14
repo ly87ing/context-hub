@@ -26,12 +26,14 @@ SCRIPT_FILES_TO_COPY = (
     "yaml_compat.py",
     "create_capability.py",
     "refresh_context.py",
+    "sync_design_context.py",
     "sync_capability_status.py",
     "bootstrap_credentials_check.py",
     "update_llms_txt.py",
     "sync_topology.py",
     "check_consistency.py",
     "check_stale.py",
+    "check_semantic_consistency.py",
 )
 TEMPLATE_FILES_TO_COPY = (
     "spec.md",
@@ -256,6 +258,8 @@ def main() -> int:
     domains_payload = build_domains_payload(repos)
     system_payload = build_system_yaml_payload(repos)
     testing_payload = build_testing_sources_payload(test_sources)
+    design_payload = {"sources": []}
+    release_payload = {"releases": []}
     ownership_payload = build_initial_ownership_payload(project_id, args.name)
 
     ensure_directory(output_dir, args.dry_run)
@@ -263,6 +267,8 @@ def main() -> int:
     write_yaml_file(output_dir / "topology" / "domains.yaml", domains_payload, args.dry_run)
     write_yaml_file(output_dir / "topology" / "system.yaml", system_payload, args.dry_run)
     write_yaml_file(output_dir / "topology" / "testing-sources.yaml", testing_payload, args.dry_run)
+    write_yaml_file(output_dir / "topology" / "design-sources.yaml", design_payload, args.dry_run)
+    write_yaml_file(output_dir / "topology" / "releases.yaml", release_payload, args.dry_run)
     write_yaml_file(output_dir / "topology" / "ownership.yaml", ownership_payload, args.dry_run)
 
     write_decision_files(output_dir, args.dry_run)
@@ -277,6 +283,8 @@ def main() -> int:
         domains_payload=domains_payload,
         system_payload=system_payload,
         testing_sources_payload=testing_payload,
+        design_sources_payload=design_payload,
+        release_payload=release_payload,
     )
     ensure_directory(output_dir / ".context", args.dry_run)
     write_text_file(output_dir / ".context" / "llms.txt", llms_text, args.dry_run)

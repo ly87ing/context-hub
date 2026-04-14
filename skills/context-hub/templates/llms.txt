@@ -17,6 +17,12 @@
 ## 测试源
 {source_lines}
 
+## 设计源
+{design_lines}
+
+## 迭代 / Release
+{release_lines}
+
 ## AI 行为约束
 - 任何写入前先读取已有上下文
 - 更新 capability 时同步维护 topology/domains.yaml
